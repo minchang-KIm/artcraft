@@ -1,3 +1,10 @@
+use crate::core::commands::total_recall_project::create::total_recall_project_create;
+use crate::core::commands::total_recall_project::save::total_recall_project_save;
+use crate::core::commands::total_recall_project::restore::total_recall_project_restore;
+use crate::core::commands::total_recall_project::delete::total_recall_project_delete;
+use crate::core::commands::total_recall_project::exists::total_recall_project_exists;
+use crate::core::commands::total_recall_project::list::total_recall_project_list;
+use crate::core::commands::total_recall_project::load::total_recall_project_load;
 use crate::core::commands::cost_estimate::estimate_audio_cost_command::estimate_audio_cost_command;
 use crate::core::commands::cost_estimate::estimate_mesh_cost_command::estimate_mesh_cost_command;
 use crate::core::commands::generate::generate_splat_command::generate_splat_command;
@@ -225,6 +232,13 @@ pub fn run() {
   // TODO: Break this out into another module, because RustRover/IntelliJ lags with these macros.
   //  My first attempt at naively doing this didn't work because the macros can't find their codegen'd targets.
   let builder = builder.invoke_handler(tauri::generate_handler![
+    total_recall_project_create,
+    total_recall_project_save,
+    total_recall_project_restore,
+    total_recall_project_delete,
+    total_recall_project_exists,
+    total_recall_project_list,
+    total_recall_project_load,
     check_sora_session_command,
     download_directory_reveal_command,
     download_media_file_command,

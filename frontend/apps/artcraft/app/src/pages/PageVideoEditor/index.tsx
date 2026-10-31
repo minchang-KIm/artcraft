@@ -13,6 +13,8 @@ import { tauriAuthUserAdapter } from "./adapters/auth-user-adapter";
 import { tauriMediaSourceAdapter } from "./adapters/media-source-adapter";
 import { tauriExportSinkAdapter } from "./adapters/export-sink-adapter";
 import { useTauriAssetGalleryAdapter } from "./adapters/asset-gallery-adapter";
+import { invoke } from "@tauri-apps/api/core";
+import { createTotalRecallProjectStorage } from "./adapters/total-recall-project-storage";
 
 // Tauri host for the @storyteller/ui-video-editor lib.
 //
@@ -50,6 +52,13 @@ function buildBootstrapProject({ id }: { id: string }): TProject {
 
 export function PageVideoEditor() {
   const [ready, setReady] = useState(false);
+  const [storageError, setStorageError] = useState<string | null>(null);
+  const initialization = useRef<Promise<void> | null>(null);
+
+  const storage = useMemo(() => {
+    const legacy = createDefaultAdapters().projectStorage;
+    return createTotalRecallProjectStorage(invoke, legacy);
+  }, []);
 
   const { adapter: assetGalleryAdapter, modal: galleryModal } =
     useTauriAssetGalleryAdapter();
@@ -61,8 +70,9 @@ export function PageVideoEditor() {
       mediaSource: tauriMediaSourceAdapter,
       assetGallery: assetGalleryAdapter,
       exportSink: tauriExportSinkAdapter,
+      projectStorage: storage.adapter,
     }),
-    [assetGalleryAdapter],
+    [assetGalleryAdapter, storage],
   );
 
   // Stable transient id so StrictMode + adapter ref churn don't
@@ -71,24 +81,35 @@ export function PageVideoEditor() {
   const resolvedProjectId = transientIdRef.current;
 
   useEffect(() => {
-    // Explicit initialize before EditorProvider mounts so the Tauri
-    // adapter bundle wins the first-call-wins idempotent semantics.
-    EditorCore.initialize({
-      adapters: { ...createDefaultAdapters(), ...adapters },
-    });
-    const editor = EditorCore.getInstance();
-
-    if (editor.project.getActive()?.metadata.id !== resolvedProjectId) {
-      const project = buildBootstrapProject({ id: resolvedProjectId });
-      editor.project.setActiveProject({ project });
-      editor.scenes.initializeScenes({
-        scenes: project.scenes,
-        currentSceneId: project.currentSceneId,
-      });
+    let active = true;
+    if (!initialization.current) {
+      initialization.current = (async () => {
+        // Copy first; never delete or overwrite the old IndexedDB records.
+        await storage.migrateLegacy();
+        EditorCore.initialize({ adapters: { ...createDefaultAdapters(), ...adapters } });
+        const editor = EditorCore.getInstance();
+        if (editor.project.getActive()) return;
+        const projects = await storage.adapter.listProjects();
+        const loaded = projects.length ? await editor.project.openProject({ id: projects[0].id }) : null;
+        if (projects.length && !loaded) throw new Error("The last project could not be opened.");
+        if (!loaded) {
+          const project = buildBootstrapProject({ id: resolvedProjectId });
+          editor.project.setActiveProject({ project });
+          editor.scenes.initializeScenes({ scenes: project.scenes, currentSceneId: project.currentSceneId });
+        }
+      })();
     }
-    setReady(true);
-  }, [resolvedProjectId, adapters]);
+    initialization.current.then(() => {
+      if (active) setReady(true);
+    }).catch((error: unknown) => {
+      if (active) {
+        setStorageError(error instanceof Error ? error.message : String(error));
+      }
+    });
+    return () => { active = false; };
+  }, [resolvedProjectId, adapters, storage]);
 
+  if (storageError) return <div role="alert">Project storage unavailable: {storageError}</div>;
   if (!ready) return null;
 
   return (

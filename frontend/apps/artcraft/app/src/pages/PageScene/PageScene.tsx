@@ -14,6 +14,7 @@ import { useTabStore } from "~/pages/Stores/TabState";
 import { authentication, scene } from "~/signals";
 import { getCurrentLocationWithoutParams } from "~/utilities";
 import { useTauriPageSceneAdapter } from "./useTauriPageSceneAdapter";
+import { LocalCharacterPreview } from "./LocalCharacterPreview";
 
 export const PageScene = ({ sceneToken }: { sceneToken?: string }) => {
   // Tab-cache plumbing. Stage3D is single-instance and tab-agnostic;
@@ -77,7 +78,8 @@ export const PageScene = ({ sceneToken }: { sceneToken?: string }) => {
   // Tauri host's TopBar lives outside this box, so we reserve space
   // here. 56px matches the `.topbar-spacer` height in base.css.
   return (
-    <div className="w-screen" style={{ height: "calc(100vh - 56px)" }}>
+    <div className="relative w-screen" style={{ height: "calc(100vh - 56px)" }}>
+      <LocalCharacterPreview />
       <Stage3D
         adapter={adapter}
         sceneToken={sceneToken}
