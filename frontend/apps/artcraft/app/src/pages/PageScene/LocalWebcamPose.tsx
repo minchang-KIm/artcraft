@@ -1,0 +1,245 @@
+import { useEffect, useRef, useState } from "react";
+import { Object3D, Quaternion, Vector3 } from "three";
+import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, type PoseLandmark } from "@storyteller/ui-pagescene";
+import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
+import visionUrl from "@mediapipe/tasks-vision?url";
+import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
+import wasmBinaryUrl from "@mediapipe/tasks-vision/vision_wasm_internal.wasm?url";
+
+const MODEL_HASHES = new Set([
+  "59929e1d1ee95287735ddd833b19cf4ac46d29bc7afddbbf6753c459690d574a",
+  "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
+  "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b",
+]);
+const SEGMENTS = [
+  ["Left upper arm", 11, 13], ["Left forearm", 13, 15], ["Right upper arm", 12, 14], ["Right forearm", 14, 16],
+  ["Left thigh", 23, 25], ["Left lower leg", 25, 27], ["Right thigh", 24, 26], ["Right lower leg", 26, 28],
+] as const;
+
+type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
+type Preview = { editor: Editor; character: Object3D; bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
+type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; cancelInit?: () => void };
+const absolute = (url: string) => new URL(url, window.location.href).href;
+
+function parentRotation(parent: Object3D): Quaternion {
+  parent.updateWorldMatrix(true, false);
+  const scale = parent.getWorldScale(new Vector3());
+  const magnitude = Math.max(Math.abs(scale.x), Math.abs(scale.y), Math.abs(scale.z));
+  const basis = [0, 1, 2].map(index => new Vector3().setFromMatrixColumn(parent.matrixWorld, index).normalize());
+  const shear = Math.max(Math.abs(basis[0].dot(basis[1])), Math.abs(basis[1].dot(basis[2])), Math.abs(basis[0].dot(basis[2])));
+  if (magnitude < 1e-8 || Math.min(scale.x, scale.y, scale.z) <= 0 || Math.max(Math.abs(scale.x - scale.y), Math.abs(scale.y - scale.z), Math.abs(scale.x - scale.z)) > magnitude * 1e-4 || parent.matrixWorld.determinant() <= 0 || shear > 1e-4) {
+    throw new Error("The selected bone requires a positive uniform parent scale.");
+  }
+  return parent.getWorldQuaternion(new Quaternion());
+}
+
+function bonePath(character: Object3D, bone: Object3D): Array<{ index: number; name: string; type: string }> {
+  const path: Array<{ index: number; name: string; type: string }> = [];
+  let node = bone;
+  while (node !== character) {
+    const parent: Object3D | null = node.parent;
+    if (!parent) throw new Error("The bone is no longer in the character.");
+    path.unshift({ index: parent.children.indexOf(node), name: node.name, type: node.type });
+    node = parent;
+  }
+  return path;
+}
+
+/** The model and camera frames remain on this device. */
+export function LocalWebcamPose({ editorInitialized }: { editorInitialized: boolean }) {
+  const [model, setModel] = useState<File | null>(null);
+  const [running, setRunning] = useState(false);
+  const [starting, setStarting] = useState(false);
+  const [status, setStatus] = useState("");
+  const [bones, setBones] = useState<Array<{ id: string; name: string }>>([]);
+  const [boneId, setBoneId] = useState("");
+  const [segment, setSegment] = useState(0);
+  const [mirror, setMirror] = useState(false);
+  const [calibrated, setCalibrated] = useState(false);
+  const video = useRef<HTMLVideoElement>(null);
+  const session = useRef<Session | null>(null);
+  const generation = useRef(0);
+  const mounted = useRef(true);
+
+  const stop = (restore = true) => {
+    generation.current++;
+    const current = session.current;
+    session.current = null;
+    if (current) {
+      current.stopped = true;
+      current.cancelInit?.();
+      cancelAnimationFrame(current.frameId);
+      if (restore && current.preview) current.preview.bone.quaternion.copy(current.preview.before);
+      current.worker.terminate();
+      current.stream?.getTracks().forEach(track => track.stop());
+    }
+    if (video.current) video.current.srcObject = null;
+    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); }
+  };
+
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; stop(); };
+  }, []);
+
+  useEffect(() => {
+    const editor = getActiveEditor();
+    if (!editorInitialized || !editor) return;
+    const refresh = () => {
+      stop();
+      const selected = editor.sceneManager?.selected_objects;
+      const character = selected?.length === 1 && selected[0].userData.isCharacter ? selected[0] : undefined;
+      const next: Array<{ id: string; name: string }> = [];
+      character?.traverse((item: Object3D) => { if (item.type === "Bone") next.push({ id: item.uuid, name: item.name || "Unnamed bone" }); });
+      setBones(next);
+      setBoneId(next[0]?.id ?? "");
+    };
+    refresh();
+    const unselect = editor.bus.subscribe(SelectionChangedEvent, refresh);
+    const reset = editor.bus.subscribe(SceneResetEvent, refresh);
+    const timeline = editor.bus.subscribe(TimelinePlayheadEvent, () => {
+      if (session.current?.preview) {
+        stop();
+        // Seeking evaluates clips before emitting this event. Re-evaluate after
+        // cancelling the preview so it cannot overwrite the requested pose.
+        editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead());
+        setStatus("Timeline changed; preview cancelled.");
+      }
+    });
+    return () => { unselect(); reset(); timeline(); stop(); };
+  }, [editorInitialized]);
+
+  const start = async () => {
+    if (!model || starting || running) return;
+    const token = ++generation.current;
+    setStarting(true);
+    setStatus("Checking local model…");
+    let current: Session | null = null;
+    try {
+      if (!model.name.toLowerCase().endsWith(".task") || model.size < 1 || model.size > 50 * 1024 * 1024) throw new Error("Select a MediaPipe pose .task file up to 50 MiB.");
+      const buffer = await model.arrayBuffer();
+      const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)), b => b.toString(16).padStart(2, "0")).join("");
+      if (!MODEL_HASHES.has(digest)) throw new Error("The model does not match a supported pinned MediaPipe pose model.");
+      if (generation.current !== token) return;
+      const worker = new Worker(absolute(import.meta.env.DEV ? "/__total_recall_pose_worker.js" : workerUrl));
+      current = { worker, stream: null, stopped: false, frameId: 0, nextId: 1, busy: false, points: null, preview: null };
+      session.current = current;
+      const active = current;
+      await new Promise<void>((resolve, reject) => {
+        const finish = (error?: Error) => { clearTimeout(timer); active.cancelInit = undefined; error ? reject(error) : resolve(); };
+        const timer = window.setTimeout(() => finish(new Error("Pose model initialization timed out.")), 60000);
+        active.cancelInit = () => finish(new Error("Pose initialization cancelled."));
+        worker.onmessage = ({ data }) => { if (data.id === 1) finish(data.type === "ready" ? undefined : new Error(data.message || "Pose model initialization failed.")); };
+        worker.onerror = event => finish(new Error(event.message || "Pose worker failed."));
+        try { worker.postMessage({ id: 1, type: "init", moduleUrl: absolute(visionUrl), wasmLoaderUrl: absolute(wasmLoaderUrl), wasmBinaryUrl: absolute(wasmBinaryUrl), modelBuffer: buffer }, [buffer]); }
+        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      });
+      if (generation.current !== token || active.stopped) return;
+      setStatus("Requesting camera access…");
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+      if (generation.current !== token || active.stopped) { stream.getTracks().forEach(track => track.stop()); return; }
+      active.stream = stream;
+      stream.getVideoTracks().forEach(track => track.addEventListener("ended", () => { if (!active.stopped) { stop(); setStatus("Camera stopped; preview cancelled."); } }, { once: true }));
+      if (!video.current) throw new Error("Camera preview is unavailable.");
+      video.current.srcObject = stream;
+      await video.current.play();
+      if (generation.current !== token || active.stopped) return;
+      worker.onmessage = ({ data }) => {
+        if (active.stopped) return;
+        if (data.type === "error") { setStatus(`Pose error: ${data.message}`); stop(); return; }
+        if (data.type !== "pose") return;
+        active.busy = false;
+        active.points = data.worldLandmarks?.[0] ?? null;
+        const preview = active.preview;
+        if (!preview) return;
+        try {
+          const selected = preview.editor.sceneManager?.selected_objects;
+          if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
+          const [, a, b] = SEGMENTS[preview.segment];
+          preview.bone.quaternion.copy(preview.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(preview.parent)));
+        } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); stop(); }
+      };
+      worker.onerror = event => { if (!active.stopped) { setStatus(event.message || "Pose worker failed."); stop(); } };
+      const frame = () => {
+        if (active.stopped) return;
+        active.frameId = requestAnimationFrame(frame);
+        if (active.busy || !video.current || video.current.readyState < 2) return;
+        active.busy = true;
+        void createImageBitmap(video.current).then(bitmap => {
+          if (active.stopped) { bitmap.close(); return; }
+          worker.postMessage({ id: ++active.nextId, type: "frame", frame: bitmap, timestampMs: performance.now() }, [bitmap]);
+        }).catch(error => { if (!active.stopped) { setStatus(`Camera frame error: ${String(error)}`); stop(); } });
+      };
+      active.frameId = requestAnimationFrame(frame);
+      setRunning(true);
+      setStarting(false);
+      setStatus("Camera running locally. Select a limb and calibrate.");
+    } catch (error) {
+      if (generation.current === token) { stop(); setStatus(error instanceof Error ? error.message : String(error)); }
+      else if (current && !current.stopped) { current.worker.terminate(); current.stream?.getTracks().forEach(track => track.stop()); }
+    }
+  };
+
+  const calibrate = () => {
+    try {
+      const current = session.current;
+      const editor = getActiveEditor();
+      const selected = editor?.sceneManager?.selected_objects;
+      if (!current || !editor || selected?.length !== 1 || !selected[0].userData.isCharacter || editor.timelineController.getIsPlaying()) throw new Error("Select one character and pause the timeline.");
+      const character = selected[0];
+      const bone = character.getObjectByProperty("uuid", boneId);
+      const camera = editor.cameraController.camera;
+      if (!bone || bone.type !== "Bone" || !bone.parent || !camera) throw new Error("Select a valid bone and stage camera.");
+      if (current.preview) current.preview.bone.quaternion.copy(current.preview.before);
+      current.preview = null;
+      setCalibrated(false);
+      const [, a, b] = SEGMENTS[segment];
+      const before = bone.quaternion.clone();
+      const retarget = new LandmarkBoneRetarget(current.points?.[a] as PoseLandmark, current.points?.[b] as PoseLandmark, camera.getWorldQuaternion(new Quaternion()), parentRotation(bone.parent), before, mirror);
+      current.preview = { editor, character, bone, parent: bone.parent, before, retarget, segment };
+      setCalibrated(true);
+      setStatus("Calibrated. Move the selected limb, then apply or cancel.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const apply = () => {
+    const preview = session.current?.preview;
+    if (!preview) return;
+    const selected = preview.editor.sceneManager?.selected_objects;
+    if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) {
+      stop();
+      setStatus("Scene selection or playback changed; preview cancelled.");
+      return;
+    }
+    const after = preview.bone.quaternion.clone();
+    const { editor, bone, before, character } = preview;
+    const characterId = character.uuid;
+    const path = bonePath(character, bone);
+    const write = (value: Quaternion) => {
+      let target = editor.activeScene.scene.getObjectByProperty("uuid", characterId);
+      for (const part of path) {
+        target = target?.children[part.index];
+        if (!target || target.name !== part.name || target.type !== part.type) throw new Error("The character skeleton no longer matches the webcam pose.");
+      }
+      if (!target || target.type !== "Bone") throw new Error("The webcam pose target is unavailable.");
+      target.quaternion.copy(value);
+    };
+    editor.history.record({ label: "Apply webcam bone pose", apply: () => write(after), revert: () => write(before) });
+    stop(false);
+    setStatus("Pose applied. Save the local scene to retain it.");
+  };
+
+  return <details className="max-w-72">
+    <summary>Local webcam pose (experimental)</summary>
+    <p>Camera frames stay on this device. Only one chosen bone is previewed.</p>
+    <label>Pose model <input aria-label="Pose model" type="file" accept=".task" disabled={running || starting} onChange={event => setModel(event.currentTarget.files?.[0] ?? null)} /></label>
+    <label>Bone <select aria-label="Webcam bone" className="max-w-48 text-black" value={boneId} disabled={calibrated} onChange={event => setBoneId(event.target.value)}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
+    <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>
+    <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
+    <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />
+    {!running && !starting ? <button type="button" disabled={!model || !boneId} onClick={() => void start()}>Start local camera</button> : <button type="button" onClick={() => { stop(); setStatus("Camera stopped; preview cancelled."); }}>Stop camera</button>}
+    <button type="button" disabled={!running || !boneId} onClick={calibrate}>Calibrate selected bone</button>
+    <button type="button" disabled={!calibrated} onClick={apply}>Apply webcam pose</button>
+    {status && <p role="status">{status}</p>}
+  </details>;
+}

@@ -3,6 +3,7 @@ import react from "@vitejs/plugin-react";
 import tsconfigPaths from "vite-tsconfig-paths";
 import path from "path";
 import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
 import wasm from "vite-plugin-wasm";
 import topLevelAwait from "vite-plugin-top-level-await";
 
@@ -44,6 +45,20 @@ const sparkWasmDataUrlFix = (): Plugin => ({
 const projectRoot = __dirname;
 const appRoot = path.resolve(projectRoot, "app");
 const workspaceRoot = path.resolve(projectRoot, "..", "..");
+const poseWorkerPath = path.resolve(workspaceRoot, "../../../workers/pose/landmarker-worker.mjs");
+
+// Vite rewrites dynamic import() in .mjs files into a static import of its
+// client, which breaks classic workers. Serve the original bytes in dev;
+// production emits the same file as an asset below.
+const poseWorkerDevAsset = (): Plugin => ({
+  name: "pose-worker-dev-asset",
+  configureServer(server) {
+    server.middlewares.use("/__total_recall_pose_worker.js", (_request, response) => {
+      response.setHeader("Content-Type", "text/javascript; charset=utf-8");
+      response.end(readFileSync(poseWorkerPath));
+    });
+  },
+});
 
 export default defineConfig({
   root: appRoot,
@@ -52,6 +67,9 @@ export default defineConfig({
   },
   build: {
     outDir: path.resolve(projectRoot, "dist"),
+    // A data URL has an opaque origin and cannot enforce the pose worker's
+    // same-origin resource policy. Always emit it as a real asset.
+    assetsInlineLimit: (file) => file.endsWith("landmarker-worker.mjs") ? false : undefined,
     rollupOptions: {
       input: {
         index: resolve(projectRoot, "app/index.html"),
@@ -60,6 +78,7 @@ export default defineConfig({
   },
   plugins: [
     react(),
+    poseWorkerDevAsset(),
     sparkWasmDataUrlFix(),
     tsconfigPaths({
       // Resolve workspace packages to source for every importer, including shared
@@ -71,7 +90,7 @@ export default defineConfig({
   ],
   server: {
     fs: {
-      allow: [workspaceRoot],
+      allow: [workspaceRoot, path.resolve(workspaceRoot, "../../../workers/pose")],
     },
   },
   resolve: {

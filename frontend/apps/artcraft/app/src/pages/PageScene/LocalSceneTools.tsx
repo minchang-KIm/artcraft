@@ -6,6 +6,7 @@ import { wavDuration } from "./wav-duration";
 import { SceneAudioPreview } from "./scene-audio-preview";
 import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
 import { LocalRecovery } from "~/pages/LocalRecovery";
+import { LocalWebcamPose } from "./LocalWebcamPose";
 import { useTabStore } from "~/pages/Stores/TabState";
 import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
@@ -374,6 +375,7 @@ export function LocalSceneTools() {
   return (
     <div className="absolute right-4 top-28 z-20 flex max-h-[calc(100vh-7rem)] flex-col items-end gap-2 overflow-y-auto rounded bg-ui-controls p-2 text-sm text-white">
       <LocalWorkerSettings />
+      <LocalWebcamPose editorInitialized={editorInitialized} />
       <LocalRecovery kind="scene" copy={async (value, revision) => {
         const source = value as SceneDocument;
         if (!source || source.kind !== "scene" || typeof source.id !== "string" || typeof source.name !== "string") throw new Error("Invalid scene history.");
