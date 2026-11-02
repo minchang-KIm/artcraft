@@ -29,6 +29,27 @@ export interface TimelineTrack {
   keyframes: Keyframe[]; // kept sorted ascending by time
 }
 
+// Paths are relative to the character root. Each segment is checked so a
+// changed hierarchy cannot silently animate a different bone after loading.
+export interface BonePathPart {
+  index: number;
+  name: string;
+  type: string;
+}
+
+export interface BoneRotationKeyframe {
+  id: string;
+  time: number;
+  rotation: [number, number, number, number];
+  easing: EasingSpec;
+}
+
+export interface BoneRotationTrack {
+  objectUuid: string;
+  path: BonePathPart[];
+  keyframes: BoneRotationKeyframe[];
+}
+
 // An animation clip placed on an object's clip row. Only the reference +
 // placement is serialized; the actual THREE.AnimationClip is resolved at
 // runtime — from the `sourceMediaId` GLB for library clips, or from the
@@ -75,6 +96,8 @@ export interface TimelineData {
   fps: number;
   tracks: TimelineTrack[]; // per-object transform keyframes
   clipLanes: ClipLane[]; // per-character skeletal animation clips
+  // Optional for backwards compatibility with previously saved scenes.
+  boneTracks?: BoneRotationTrack[];
 }
 
 export type EasingPresetName = "linear" | "easeIn" | "easeOut" | "easeInOut";
