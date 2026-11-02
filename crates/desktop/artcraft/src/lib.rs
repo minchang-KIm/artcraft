@@ -1,4 +1,5 @@
 use crate::core::commands::total_recall_project::scene_sequence::{total_recall_scene_sequence_begin, total_recall_scene_sequence_append, total_recall_scene_sequence_finish, total_recall_scene_sequence_abort};
+use crate::core::commands::total_recall_project::backup::{total_recall_backup_export, total_recall_backup_import};
 use crate::core::commands::total_recall_project::worker_settings::{total_recall_worker_settings, total_recall_choose_worker_setting, total_recall_clear_worker_setting};
 use crate::core::commands::total_recall_project::prepare_webtoon::total_recall_prepare_webtoon;
 use crate::core::commands::total_recall_project::render_video::{total_recall_render_video, total_recall_save_video, total_recall_render_begin, total_recall_render_cancel, total_recall_render_finish, total_recall_render_progress};
@@ -242,6 +243,8 @@ pub fn run() {
   // TODO: Break this out into another module, because RustRover/IntelliJ lags with these macros.
   //  My first attempt at naively doing this didn't work because the macros can't find their codegen'd targets.
   let builder = builder.invoke_handler(tauri::generate_handler![
+    total_recall_backup_export,
+    total_recall_backup_import,
     total_recall_worker_settings,
     total_recall_choose_worker_setting,
     total_recall_clear_worker_setting,

@@ -78,6 +78,8 @@ export function PageVideoEditor() {
   const [mockDialogue, setMockDialogue] = useState("");
   const [sceneFrames, setSceneFrames] = useState<SceneFrame[]>([]);
   const [selectedFrame, setSelectedFrame] = useState("");
+  const [localProjects, setLocalProjects] = useState<Array<{ id: string; name: string }>>([]);
+  const [selectedProject, setSelectedProject] = useState("");
   const [importedLink, setImportedLink] = useState<ImportedLinkInfo | null>(null);
   const [renderJobId, setRenderJobId] = useState<string | null>(null);
   const [renderProgress, setRenderProgress] = useState(0);
@@ -192,6 +194,35 @@ export function PageVideoEditor() {
     const id = await importWebtoon(value, storage.adapter, tauriMediaSourceAdapter);
     if (!await editor.project.openProject({ id })) throw new Error("Imported project could not be opened.");
     setImportStatus("Webtoon timeline imported. Original project remains unchanged.");
+  };
+
+  const refreshLocalProjects = async () => {
+    const projects = await storage.adapter.listProjects();
+    setLocalProjects(projects);
+    setSelectedProject(id => projects.some((project: { id: string }) => project.id === id) ? id : projects[0]?.id ?? "");
+  };
+
+  const backup = async (action: "export" | "import" | "list" | "open") => {
+    if (importing) return;
+    setImporting(true);
+    try {
+      const editor = EditorCore.getInstance();
+      if (action !== "list") await editor.project.saveCurrentProject();
+      if (action === "export") {
+        const saved = await invoke<boolean>("total_recall_backup_export");
+        setImportStatus(saved ? "Local project backup saved." : "Backup cancelled.");
+      } else if (action === "import") {
+        const result = await invoke<{ projects: number; revisions: number; assets: number } | null>("total_recall_backup_import");
+        if (result) { await refreshLocalProjects(); setImportStatus(`Imported ${result.projects} project(s), ${result.revisions} revision(s), ${result.assets} asset(s).`); }
+        else setImportStatus("Backup import cancelled.");
+      } else if (action === "list") {
+        await refreshLocalProjects(); setImportStatus("Local projects listed.");
+      } else {
+        if (!selectedProject || !await editor.project.openProject({ id: selectedProject })) throw new Error("Local project could not be opened.");
+        setImportStatus("Local project opened.");
+      }
+    } catch (error) { setImportStatus(`Error: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { setImporting(false); }
   };
 
   const importOriginalProject = async () => {
@@ -383,6 +414,17 @@ export function PageVideoEditor() {
   return (
     <div className="h-full w-full overflow-hidden">
       <div className="absolute left-4 top-52 z-20 rounded bg-ui-controls p-2 text-sm text-white"><LocalWorkerSettings /></div>
+      <details className="absolute left-4 top-64 z-20 rounded bg-ui-controls p-2 text-sm text-white">
+        <summary>Local project backup</summary>
+        <div className="flex max-w-80 flex-col gap-1">
+          <p>Backs up all local projects, saved history, deleted projects and stored assets. Save 3D scenes first and choose a .trbackup file name.</p>
+          <button type="button" disabled={importing} onClick={() => void backup("export")}>Export all local projects</button>
+          <button type="button" disabled={importing} onClick={() => void backup("import")}>Import local project backup</button>
+          <button type="button" disabled={importing} onClick={() => void backup("list")}>List local video projects</button>
+          <label>Video project <select aria-label="Local video project" className="text-black" value={selectedProject} disabled={importing || !localProjects.length} onChange={event => setSelectedProject(event.target.value)}><option value="" disabled>Select a project</option>{localProjects.map(project => <option key={project.id} value={project.id}>{project.name}</option>)}</select></label>
+          <button type="button" disabled={importing || !selectedProject} onClick={() => void backup("open")}>Open local video project</button>
+        </div>
+      </details>
       <button type="button" className="absolute left-4 top-20 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void importOriginalProject()}>Import webtoon project</button>
       <label className="absolute right-4 top-20 z-20 cursor-pointer rounded bg-ui-controls px-2 py-1 text-sm text-white">Import prepared webtoon<input aria-label="Import prepared webtoon" type="file" accept=".json,application/json" className="sr-only" disabled={importing} onChange={(event) => { void importProject(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <button type="button" className="absolute right-4 top-36 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void saveRenderSnapshot()}>Save local render snapshot</button>

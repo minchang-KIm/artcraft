@@ -1,5 +1,6 @@
 pub mod asset_get;
 pub mod asset_put;
+pub mod backup;
 pub mod create;
 pub mod delete;
 pub mod exists;
