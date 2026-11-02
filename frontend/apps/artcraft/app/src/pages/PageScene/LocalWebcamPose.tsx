@@ -3,6 +3,7 @@ import { Object3D, Quaternion, Vector3 } from "three";
 import { invoke } from "@tauri-apps/api/core";
 import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark, type TrackingState } from "@storyteller/ui-pagescene";
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
+import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -58,6 +59,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   const [boneId, setBoneId] = useState("");
   const [segment, setSegment] = useState(0);
   const [mappings, setMappings] = useState<Array<{ boneId: string; segment: number }>>([]);
+  const [mappingScope, setMappingScope] = useState<MappingScope>("all");
   const [mirror, setMirror] = useState(false);
   const [lossMode, setLossMode] = useState<"hold" | "fade">("hold");
   const [tracking, setTracking] = useState<TrackingState | null>(null);
@@ -226,6 +228,16 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
+  const suggestMappings = () => {
+    const selected = getActiveEditor()?.sceneManager?.selected_objects;
+    if (selected?.length !== 1 || !selected[0].userData.isCharacter) { setStatus("Select one character in the scene."); return; }
+    const result = suggestWebcamMappings(selected[0], mappingScope);
+    if (!result.mappings.length) { setStatus(`No complete, unambiguous limb chains found (${result.unavailable.join(", ")}). Choose mappings manually.`); return; }
+    const [first, ...rest] = result.mappings;
+    setBoneId(first.boneId); setSegment(first.segment); setMappings(rest);
+    setStatus(`Suggested ${result.mappings.length} bone mappings. Check each mapping before calibration.${result.unavailable.length ? ` Unavailable: ${result.unavailable.join(", ")}.` : ""}`);
+  };
+
   const apply = () => {
     const preview = session.current?.preview;
     if (!preview) return;
@@ -306,6 +318,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     <summary>Local webcam pose (experimental)</summary>
     <p>Camera frames stay on this device. Map each chosen bone to a different limb.</p>
     <label>Pose model <input aria-label="Pose model" type="file" accept=".task" disabled={running || starting} onChange={event => setModel(event.currentTarget.files?.[0] ?? null)} /></label>
+    <label>Mapping scope <select aria-label="Webcam mapping scope" className="text-black" value={mappingScope} disabled={calibrated} onChange={event => setMappingScope(event.target.value as MappingScope)}><option value="all">All limbs</option><option value="left-arm">Left arm</option><option value="right-arm">Right arm</option><option value="left-leg">Left leg</option><option value="right-leg">Right leg</option></select></label>
+    <button type="button" disabled={calibrated || saving || !bones.length} onClick={suggestMappings}>Suggest bone mappings</button>
     <label>Bone <select aria-label="Webcam bone" className="max-w-48 text-black" value={boneId} disabled={calibrated} onChange={event => setBoneId(event.target.value)}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
     <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>
     {mappings.map((mapping, index) => <div key={index}>
