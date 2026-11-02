@@ -11,6 +11,7 @@ import type Editor from "../editor";
 import { snapshotTransform, writeTransform } from "./actions/snapshots";
 import { TimelineEditAction } from "./actions/TimelineEditAction";
 import { sampleTrackAt } from "../timeline/interpolation";
+import { resolveBonePath, sampleBoneRotation } from "../timeline/boneRotation";
 import {
   cloneTimeline,
   DEFAULT_EASING,
@@ -23,6 +24,7 @@ import {
   type Keyframe,
   type TimelineData,
   type TimelineTrack,
+  type BonePathPart,
 } from "../timeline/types";
 import {
   TimelineChangedEvent,
@@ -165,6 +167,7 @@ export class TimelineController {
     }
     if (!Array.isArray(this.timeline.tracks)) this.timeline.tracks = [];
     if (!Array.isArray(this.timeline.clipLanes)) this.timeline.clipLanes = [];
+    if (!Array.isArray(this.timeline.boneTracks)) this.timeline.boneTracks = [];
     this.saved = cloneTimeline(this.timeline);
     this.playhead = Math.min(this.playhead, this.timeline.duration);
     this.syncClipLanes();
@@ -250,6 +253,39 @@ export class TimelineController {
   }
 
   // ─── keyframe editing ──────────────────────────────────────────────────
+
+  /** Capture local bone rotations atomically, without changing the root transform. */
+  addBoneRotationKeys(objectUuid: string, paths: BonePathPart[][]): void {
+    const timeline = this.timeline;
+    if (!timeline || this.isPlaying) throw new Error("Pause the timeline before keying a pose.");
+    if (timeline.clipLanes.some(lane => lane.objectUuid === objectUuid)) throw new Error("Remove this character's motion clips before keying a pose.");
+    const root = this.editor.activeScene.scene.getObjectByProperty("uuid", objectUuid);
+    if (!root || !root.userData.isCharacter || !paths.length) throw new Error("Select a character and at least one bone.");
+    const identities = paths.map(path => JSON.stringify(path));
+    const bones = paths.map(path => resolveBonePath(root, path));
+    if (new Set(identities).size !== paths.length || bones.some(bone => !bone || ![bone.quaternion.x, bone.quaternion.y, bone.quaternion.z, bone.quaternion.w].every(Number.isFinite) || bone.quaternion.lengthSq() < 1e-12)) throw new Error("The selected bone paths or rotations are invalid.");
+    const tracks = timeline.boneTracks ?? (timeline.boneTracks = []);
+    paths.forEach((path, index) => {
+      let track = tracks.find(item => item.objectUuid === objectUuid && JSON.stringify(item.path) === identities[index]);
+      if (!track) {
+        track = { objectUuid, path: path.map(part => ({ ...part })), keyframes: [] };
+        tracks.push(track);
+      }
+      const key = { id: THREE.MathUtils.generateUUID(), time: this.playhead, rotation: bones[index]!.quaternion.clone().normalize().toArray() as [number, number, number, number], easing: { ...DEFAULT_EASING } };
+      const existing = track.keyframes.findIndex(item => Math.abs(item.time - this.playhead) < 1e-3);
+      if (existing < 0) track.keyframes.push(key); else track.keyframes[existing] = key;
+      track.keyframes.sort((a, b) => a.time - b.time);
+    });
+    this.emitChanged();
+  }
+
+  deleteBoneRotationKey(keyframeId: string): void {
+    if (!this.timeline?.boneTracks) return;
+    for (const track of this.timeline.boneTracks) track.keyframes = track.keyframes.filter(key => key.id !== keyframeId);
+    this.timeline.boneTracks = this.timeline.boneTracks.filter(track => track.keyframes.length);
+    this.evaluate();
+    this.emitChanged();
+  }
 
   // Auto-key: when an ALREADY-keyframed object is mutated, capture its current
   // transform at the playhead — replacing the keyframe there or creating one at
@@ -348,6 +384,7 @@ export class TimelineController {
   // the character's row (callers surface that to the user).
   addClipLane(objectUuid: string, strip: Omit<ClipStrip, "id">): string | null {
     if (!this.timeline) return null;
+    if (this.timeline.boneTracks?.some(track => track.objectUuid === objectUuid && track.keyframes.length)) return null;
     // Characters hold clips on a single row: snap the drop to the nearest free
     // slot so strips never overlap (see resolveFreeStart).
     const startTime = this.resolveFreeStart(
@@ -592,6 +629,14 @@ export class TimelineController {
     }
     // Pose characters from their skeletal clip lanes at the same playhead.
     this.editor.characterAnimationManager.evaluateAt(this.playhead);
+    for (const track of this.timeline.boneTracks ?? []) {
+      if (!track || typeof track.objectUuid !== "string") continue;
+      const root = this.editor.activeScene.scene.getObjectByProperty("uuid", track.objectUuid);
+      if (!root || !root.userData.isCharacter || this.timeline.clipLanes.some(lane => lane.objectUuid === track.objectUuid)) continue;
+      const bone = resolveBonePath(root, track.path);
+      const rotation = sampleBoneRotation(track, this.playhead);
+      if (bone && rotation) bone.quaternion.copy(rotation);
+    }
   }
 
   // ─── clip-lane overlap guard (single row per character) ─────────────────
