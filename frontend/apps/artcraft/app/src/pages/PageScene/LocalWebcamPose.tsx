@@ -19,7 +19,8 @@ const SEGMENTS = [
 ] as const;
 
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
-type Preview = { editor: Editor; character: Object3D; bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number; lossMode: "hold" | "fade" };
+type BoundBone = { bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
+type Preview = { editor: Editor; character: Object3D; bindings: BoundBone[]; lossMode: "hold" | "fade" };
 type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
 const absolute = (url: string) => new URL(url, window.location.href).href;
 
@@ -56,6 +57,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   const [bones, setBones] = useState<Array<{ id: string; name: string }>>([]);
   const [boneId, setBoneId] = useState("");
   const [segment, setSegment] = useState(0);
+  const [mappings, setMappings] = useState<Array<{ boneId: string; segment: number }>>([]);
   const [mirror, setMirror] = useState(false);
   const [lossMode, setLossMode] = useState<"hold" | "fade">("hold");
   const [tracking, setTracking] = useState<TrackingState | null>(null);
@@ -75,7 +77,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       current.stopped = true;
       current.cancelInit?.();
       cancelAnimationFrame(current.frameId);
-      if (restore && current.preview) current.preview.bone.quaternion.copy(current.preview.before);
+      if (restore && current.preview) current.preview.bindings.forEach(binding => binding.bone.quaternion.copy(binding.before));
       current.worker.terminate();
       current.stream?.getTracks().forEach(track => track.stop());
     }
@@ -99,6 +101,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       character?.traverse((item: Object3D) => { if (item.type === "Bone") next.push({ id: item.uuid, name: item.name || "Unnamed bone" }); });
       setBones(next);
       setBoneId(next[0]?.id ?? "");
+      setMappings([]);
     };
     refresh();
     const unselect = editor.bus.subscribe(SelectionChangedEvent, refresh);
@@ -160,11 +163,14 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
         if (!preview) return;
         try {
           const selected = preview.editor.sceneManager?.selected_objects;
-          if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
-          const [, a, b] = SEGMENTS[preview.segment];
-          preview.bone.quaternion.copy(preview.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(preview.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
-          setTracking(preview.retarget.getTrackingState());
-          if (active.recorder?.sample(performance.now(), preview.bone.quaternion)) void finishRecording();
+          if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.bindings.some(binding => preview.character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
+          for (const binding of preview.bindings) {
+            const [, a, b] = SEGMENTS[binding.segment];
+            binding.bone.quaternion.copy(binding.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
+          }
+          const states = preview.bindings.map(binding => binding.retarget.getTrackingState());
+          setTracking(states.includes("fading") ? "fading" : states.includes("holding") ? "holding" : states.includes("lost") ? "lost" : "tracking");
+          if (active.recorder?.sample(performance.now(), preview.bindings.map(binding => binding.bone.quaternion))) void finishRecording();
         } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); stop(); }
       };
       worker.onerror = event => { if (!active.stopped) { setStatus(event.message || "Pose worker failed."); stop(); } };
@@ -196,17 +202,24 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       if (!current || !editor || selected?.length !== 1 || !selected[0].userData.isCharacter || editor.timelineController.getIsPlaying()) throw new Error("Select one character and pause the timeline.");
       if (current.recorder) throw new Error("Finish or cancel the recording before recalibrating.");
       const character = selected[0];
-      const bone = character.getObjectByProperty("uuid", boneId);
       const camera = editor.cameraController.camera;
-      if (!bone || bone.type !== "Bone" || !bone.parent || !camera) throw new Error("Select a valid bone and stage camera.");
-      if (current.preview) current.preview.bone.quaternion.copy(current.preview.before);
+      if (!camera) throw new Error("The stage camera is unavailable.");
+      if (current.preview) current.preview.bindings.forEach(binding => binding.bone.quaternion.copy(binding.before));
       current.preview = null;
       setCalibrated(false);
       setTracking(null);
-      const [, a, b] = SEGMENTS[segment];
-      const before = bone.quaternion.clone();
-      const retarget = new LandmarkBoneRetarget(current.points?.[a] as PoseLandmark, current.points?.[b] as PoseLandmark, camera.getWorldQuaternion(new Quaternion()), parentRotation(bone.parent), before, mirror);
-      current.preview = { editor, character, bone, parent: bone.parent, before, retarget, segment, lossMode };
+      const selections = [{ boneId, segment }, ...mappings];
+      if (new Set(selections.map(item => item.boneId)).size !== selections.length || new Set(selections.map(item => item.segment)).size !== selections.length) throw new Error("Choose a different bone and limb for each mapping.");
+      const cameraRotation = camera.getWorldQuaternion(new Quaternion());
+      const bindings = selections.map(item => {
+        const bone = character.getObjectByProperty("uuid", item.boneId);
+        if (!bone || bone.type !== "Bone" || !bone.parent || !SEGMENTS[item.segment]) throw new Error("Select a valid bone and limb.");
+        const before = bone.quaternion.clone();
+        const [, a, b] = SEGMENTS[item.segment];
+        return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(current.points?.[a] as PoseLandmark, current.points?.[b] as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror) };
+      });
+      bindings.sort((a, b) => bonePath(character, a.bone).length - bonePath(character, b.bone).length);
+      current.preview = { editor, character, bindings, lossMode };
       setCalibrated(true);
       setTracking("tracking");
       setStatus("Calibrated. Move the selected limb, then apply or cancel.");
@@ -217,25 +230,28 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     const preview = session.current?.preview;
     if (!preview) return;
     const selected = preview.editor.sceneManager?.selected_objects;
-    if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) {
+    if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.bindings.some(binding => preview.character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || preview.editor.timelineController.getIsPlaying()) {
       stop();
       setStatus("Scene selection or playback changed; preview cancelled.");
       return;
     }
-    const after = preview.bone.quaternion.clone();
-    const { editor, bone, before, character } = preview;
+    const { editor, character, bindings } = preview;
     const characterId = character.uuid;
-    const path = bonePath(character, bone);
-    const write = (value: Quaternion) => {
-      let target = editor.activeScene.scene.getObjectByProperty("uuid", characterId);
-      for (const part of path) {
-        target = target?.children[part.index];
-        if (!target || target.name !== part.name || target.type !== part.type) throw new Error("The character skeleton no longer matches the webcam pose.");
-      }
-      if (!target || target.type !== "Bone") throw new Error("The webcam pose target is unavailable.");
-      target.quaternion.copy(value);
+    const items = bindings.map(binding => ({ path: bonePath(character, binding.bone), before: binding.before.clone(), after: binding.bone.quaternion.clone() }));
+    const write = (key: "before" | "after") => {
+      const root = editor.activeScene.scene.getObjectByProperty("uuid", characterId);
+      const targets = items.map(item => {
+        let target = root;
+        for (const part of item.path) {
+          target = target?.children[part.index];
+          if (!target || target.name !== part.name || target.type !== part.type) throw new Error("The character skeleton no longer matches the webcam pose.");
+        }
+        if (!target || target.type !== "Bone") throw new Error("The webcam pose target is unavailable.");
+        return target;
+      });
+      targets.forEach((target, index) => target.quaternion.copy(items[index][key]));
     };
-    editor.history.record({ label: "Apply webcam bone pose", apply: () => write(after), revert: () => write(before) });
+    editor.history.record({ label: "Apply webcam bone pose", apply: () => write("after"), revert: () => write("before") });
     stop(false);
     setStatus("Pose applied. Save the local scene to retain it.");
   };
@@ -246,7 +262,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     const timeline = current.preview.editor.timelineController.getTimeline();
     if (!timeline || !Number.isFinite(timeline.duration) || timeline.duration < 0.1) { setStatus("A timeline of at least 0.1 seconds is required."); return; }
     const limit = Math.min(30, timeline.duration);
-    current.recorder = new WebcamMotionRecorder(performance.now(), current.preview.bone.quaternion, limit);
+    current.recorder = new WebcamMotionRecorder(performance.now(), current.preview.bindings.map(binding => binding.bone.quaternion), limit);
     setRecording(true);
     setStatus(`Recording selected bone locally, up to ${limit} seconds.`);
   };
@@ -256,7 +272,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     const preview = current?.preview;
     const recorder = current?.recorder;
     if (!preview || !recorder) return;
-    const { editor, character, bone } = preview;
+    const { editor, character, bindings } = preview;
     const playhead = editor.timelineController.getPlayhead();
     stop();
     const token = generation.current;
@@ -264,10 +280,10 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     setStatus("Saving recorded motion…");
     const checkTarget = () => {
       const selected = editor.sceneManager?.selected_objects;
-      if (generation.current !== token || getActiveEditor() !== editor || selected?.length !== 1 || selected[0] !== character || editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) !== character || editor.timelineController.getIsPlaying()) throw new Error("Scene selection changed; recorded motion was not added.");
+      if (generation.current !== token || getActiveEditor() !== editor || selected?.length !== 1 || selected[0] !== character || editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) !== character || bindings.some(binding => character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || editor.timelineController.getIsPlaying()) throw new Error("Scene selection changed; recorded motion was not added.");
     };
     try {
-      const { data, duration } = await encodeWebcamMotion(character, bone, recorder);
+      const { data, duration } = await encodeWebcamMotion(character, bindings.map(binding => binding.bone), recorder);
       checkTarget();
       const timeline = editor.timelineController.getTimeline();
       if (!timeline || duration > timeline.duration) throw new Error("The recording is longer than the timeline.");
@@ -288,10 +304,22 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
 
   return <details className="max-w-72">
     <summary>Local webcam pose (experimental)</summary>
-    <p>Camera frames stay on this device. Only one chosen bone is previewed.</p>
+    <p>Camera frames stay on this device. Map each chosen bone to a different limb.</p>
     <label>Pose model <input aria-label="Pose model" type="file" accept=".task" disabled={running || starting} onChange={event => setModel(event.currentTarget.files?.[0] ?? null)} /></label>
     <label>Bone <select aria-label="Webcam bone" className="max-w-48 text-black" value={boneId} disabled={calibrated} onChange={event => setBoneId(event.target.value)}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
     <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>
+    {mappings.map((mapping, index) => <div key={index}>
+      <label>Bone {index + 2} <select aria-label={`Additional webcam bone ${index + 1}`} className="max-w-48 text-black" value={mapping.boneId} disabled={calibrated} onChange={event => setMappings(previous => previous.map((item, i) => i === index ? { ...item, boneId: event.target.value } : item))}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
+      <label>Limb {index + 2} <select aria-label={`Additional webcam limb ${index + 1}`} className="text-black" value={mapping.segment} disabled={calibrated} onChange={event => setMappings(previous => previous.map((item, i) => i === index ? { ...item, segment: Number(event.target.value) } : item))}>{SEGMENTS.map(([name], i) => <option key={name} value={i}>{name}</option>)}</select></label>
+      <button type="button" disabled={calibrated} onClick={() => setMappings(previous => previous.filter((_, i) => i !== index))}>Remove mapping {index + 2}</button>
+    </div>)}
+    <button type="button" disabled={calibrated || mappings.length + 1 >= Math.min(bones.length, SEGMENTS.length)} onClick={() => {
+      const usedBones = new Set([boneId, ...mappings.map(item => item.boneId)]);
+      const usedSegments = new Set([segment, ...mappings.map(item => item.segment)]);
+      const nextBone = bones.find(bone => !usedBones.has(bone.id));
+      const nextSegment = SEGMENTS.findIndex((_, index) => !usedSegments.has(index));
+      if (nextBone && nextSegment >= 0) setMappings(previous => [...previous, { boneId: nextBone.id, segment: nextSegment }]);
+    }}>Add bone mapping</button>
     <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
     <label>When tracking is lost <select aria-label="When tracking is lost" className="text-black" value={lossMode} disabled={calibrated} onChange={event => setLossMode(event.target.value as "hold" | "fade")}><option value="hold">Hold last pose</option><option value="fade">Return to calibrated pose</option></select></label>
     <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />

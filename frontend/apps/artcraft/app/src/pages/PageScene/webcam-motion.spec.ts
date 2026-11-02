@@ -36,4 +36,16 @@ describe("webcam motion", () => {
     first.name = "bad.bone";
     await expect(encodeWebcamMotion(root, first, recorder)).rejects.toThrow(/compatible/);
   });
+  it("writes synchronized tracks for distinct bones and rejects partial samples", async () => {
+    const root = new Object3D(), upper = new Bone(), lower = new Bone();
+    upper.name = "UpperArm"; lower.name = "Forearm"; root.add(upper); upper.add(lower);
+    const recorder = new WebcamMotionRecorder(0, [new Quaternion(), new Quaternion()]);
+    expect(() => recorder.sample(100, [new Quaternion()])).toThrow(/recorded pose/);
+    recorder.sample(100, [new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), 0.4), new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), 0.8)]);
+    const { data } = await encodeWebcamMotion(root, [upper, lower], recorder);
+    const loaded = await new GLTFLoader().parseAsync(data, "");
+    expect(loaded.animations[0].tracks.map(track => track.name)).toEqual(["UpperArm.quaternion", "Forearm.quaternion"]);
+    for (const track of loaded.animations[0].tracks) expect(Array.from(track.times)).toEqual([0, Math.fround(0.1)]);
+    await expect(encodeWebcamMotion(root, [upper, upper], recorder)).rejects.toThrow(/distinct/);
+  });
 });
