@@ -6,6 +6,7 @@ import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChange
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
 import { WEBCAM_SEGMENTS as SEGMENTS, webcamSecondaryAxis, webcamSegmentPoints } from "./webcam-landmarks";
+import { acquirePosePreview } from "./pose-control-lease";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -19,7 +20,7 @@ const MODEL_HASHES = new Set([
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
 type BoundBone = { bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
 type Preview = { editor: Editor; character: Object3D; bindings: BoundBone[]; lossMode: "hold" | "fade" };
-type Session = { worker: Worker | null; detector: PoseLandmarker | null; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
+type Session = { worker: Worker | null; detector: PoseLandmarker | null; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void; releasePreview?: () => void };
 const absolute = (url: string) => new URL(url, window.location.href).href;
 
 function parentRotation(parent: Object3D): Quaternion {
@@ -78,6 +79,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       current.cancelInit?.();
       cancelAnimationFrame(current.frameId);
       if (restore && current.preview) current.preview.bindings.forEach(binding => binding.bone.quaternion.copy(binding.before));
+      current.releasePreview?.();
       current.worker?.terminate();
       current.detector?.close();
       current.stream?.getTracks().forEach(track => track.stop());
@@ -243,6 +245,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       const camera = editor.cameraController.camera;
       if (!camera) throw new Error("The stage camera is unavailable.");
       if (current.preview) current.preview.bindings.forEach(binding => binding.bone.quaternion.copy(binding.before));
+      current.releasePreview?.();
+      current.releasePreview = undefined;
       current.preview = null;
       setCalibrated(false);
       setTracking(null);
@@ -257,6 +261,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
         return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(a as PoseLandmark, b as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror, 0.5, webcamSecondaryAxis(current.points, item.segment)) };
       });
       bindings.sort((a, b) => bonePath(character, a.bone).length - bonePath(character, b.bone).length);
+      current.releasePreview = acquirePosePreview(editor);
       current.preview = { editor, character, bindings, lossMode };
       setCalibrated(true);
       setTracking("tracking");
