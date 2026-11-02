@@ -2,7 +2,7 @@ import { Matrix4, Quaternion, Vector3 } from "three";
 
 /** A camera-space MediaPipe world landmark. */
 export type PoseLandmark = { x: number; y: number; z: number; visibility?: number; presence?: number };
-export type TrackingLossOptions = { timestampMs: number; mode: "hold" | "fade"; holdMs?: number; fadeMs?: number };
+export type TrackingLossOptions = { timestampMs: number; mode: "hold" | "fade"; holdMs?: number; fadeMs?: number; timeScaledSmoothing?: boolean };
 export type TrackingState = "tracking" | "holding" | "fading" | "lost";
 export type LandmarkAxis = [PoseLandmark | undefined, PoseLandmark | undefined];
 
@@ -72,7 +72,9 @@ export class LandmarkBoneRetarget {
     if (loss && (!Number.isFinite(loss.timestampMs) || loss.timestampMs < 0 ||
       (this.lastTimestamp !== null && loss.timestampMs <= this.lastTimestamp) ||
       !["hold", "fade"].includes(loss.mode) || !Number.isFinite(loss.holdMs ?? 500) || (loss.holdMs ?? 500) < 0 ||
-      !Number.isFinite(loss.fadeMs ?? 1000) || (loss.fadeMs ?? 1000) <= 0)) throw new Error("Invalid tracking loss settings");
+      !Number.isFinite(loss.fadeMs ?? 1000) || (loss.fadeMs ?? 1000) <= 0 ||
+      (loss.timeScaledSmoothing !== undefined && typeof loss.timeScaledSmoothing !== "boolean"))) throw new Error("Invalid tracking loss settings");
+    const previousTimestamp = this.lastTimestamp;
     if (loss) this.lastTimestamp = loss.timestampMs;
     const observed = direction(a, b, this.camera, this.mirror, this.confidence);
     const observedFrame = observed && this.baselineFrame ? frame(observed, secondary, this.camera, this.mirror, this.confidence) : null;
@@ -94,7 +96,11 @@ export class LandmarkBoneRetarget {
     const angle = 2 * Math.acos(Math.min(1, Math.abs(delta.w)));
     if (angle > maxRadians) { const full = delta.clone(); delta.identity().slerp(full, maxRadians / angle); }
     const target = parentWorld.clone().normalize().invert().multiply(delta).multiply(this.calibratedWorld).normalize();
-    this.lastLocal.slerp(target, smoothing).normalize();
+    // The supplied factor is calibrated at 30 Hz. Scale it by elapsed time
+    // so a slower compatibility renderer does not feel artificially sluggish.
+    const elapsed = loss?.timeScaledSmoothing && previousTimestamp !== null ? Math.min(loss.timestampMs - previousTimestamp, 250) : 1000 / 30;
+    const factor = 1 - Math.pow(1 - smoothing, elapsed / (1000 / 30));
+    this.lastLocal.slerp(target, factor).normalize();
     return this.lastLocal.clone();
   }
 }

@@ -84,4 +84,15 @@ describe("single bone landmark retarget", () => {
     const uncertain = mirrored.update(origin, top, identity(), 1, Math.PI, { timestampMs: 200, mode: "hold" }, [point(0, -1, -1, 0.1), turned[1]]);
     expect(uncertain.angleTo(limited)).toBeLessThan(1e-6);
   });
+
+  it("produces the same smoothing at different inference frame rates", () => {
+    const create = () => new LandmarkBoneRetarget(point(0, 0), point(1, 0), identity(), identity(), identity());
+    const fast = create(), slow = create();
+    const options = (timestampMs: number) => ({ timestampMs, mode: "hold" as const, timeScaledSmoothing: true });
+    fast.update(point(0, 0), point(1, 0), identity(), 0.35, Math.PI, options(0));
+    slow.update(point(0, 0), point(1, 0), identity(), 0.35, Math.PI, options(0));
+    for (const time of [100 / 3, 200 / 3, 100]) fast.update(point(0, 0), point(0, -1), identity(), 0.35, Math.PI, options(time));
+    const result = slow.update(point(0, 0), point(0, -1), identity(), 0.35, Math.PI, options(100));
+    expect(result.angleTo(fast.update(point(0, 0), point(0, -1), identity(), 0, Math.PI, options(101)))).toBeLessThan(1e-6);
+  });
 });

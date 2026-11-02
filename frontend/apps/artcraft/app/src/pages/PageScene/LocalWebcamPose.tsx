@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Object3D, Quaternion, Vector3 } from "three";
 import { invoke } from "@tauri-apps/api/core";
+import type { PoseLandmarker } from "@mediapipe/tasks-vision";
 import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark, type TrackingState } from "@storyteller/ui-pagescene";
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
@@ -18,7 +19,7 @@ const MODEL_HASHES = new Set([
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
 type BoundBone = { bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
 type Preview = { editor: Editor; character: Object3D; bindings: BoundBone[]; lossMode: "hold" | "fade" };
-type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
+type Session = { worker: Worker | null; detector: PoseLandmarker | null; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
 const absolute = (url: string) => new URL(url, window.location.href).href;
 
 function parentRotation(parent: Object3D): Quaternion {
@@ -62,6 +63,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   const [calibrated, setCalibrated] = useState(false);
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [compatibility, setCompatibility] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
   const generation = useRef(0);
@@ -76,11 +78,12 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       current.cancelInit?.();
       cancelAnimationFrame(current.frameId);
       if (restore && current.preview) current.preview.bindings.forEach(binding => binding.bone.quaternion.copy(binding.before));
-      current.worker.terminate();
+      current.worker?.terminate();
+      current.detector?.close();
       current.stream?.getTracks().forEach(track => track.stop());
     }
     if (video.current) video.current.srcObject = null;
-    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); setRecording(false); setTracking(null); }
+    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); setRecording(false); setTracking(null); setCompatibility(false); }
   };
 
   useEffect(() => {
@@ -128,19 +131,44 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       const digest = Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256", buffer)), b => b.toString(16).padStart(2, "0")).join("");
       if (!MODEL_HASHES.has(digest)) throw new Error("The model does not match a supported pinned MediaPipe pose model.");
       if (generation.current !== token) return;
-      const worker = new Worker(absolute(import.meta.env.DEV ? "/__total_recall_pose_worker.js" : workerUrl));
-      current = { worker, stream: null, stopped: false, frameId: 0, nextId: 1, busy: false, points: null, preview: null, recorder: null };
+      let worker: Worker | null = null;
+      try { worker = new Worker(absolute(import.meta.env.DEV ? "/__total_recall_pose_worker.js" : workerUrl)); } catch { /* Fall back to local canvas inference. */ }
+      current = { worker, detector: null, stream: null, stopped: false, frameId: 0, nextId: 1, busy: false, points: null, preview: null, recorder: null };
       session.current = current;
       const active = current;
-      await new Promise<void>((resolve, reject) => {
-        const finish = (error?: Error) => { clearTimeout(timer); active.cancelInit = undefined; error ? reject(error) : resolve(); };
-        const timer = window.setTimeout(() => finish(new Error("Pose model initialization timed out.")), 60000);
-        active.cancelInit = () => finish(new Error("Pose initialization cancelled."));
-        worker.onmessage = ({ data }) => { if (data.id === 1) finish(data.type === "ready" ? undefined : new Error(data.message || "Pose model initialization failed.")); };
-        worker.onerror = event => finish(new Error(event.message || "Pose worker failed."));
-        try { worker.postMessage({ id: 1, type: "init", moduleUrl: absolute(visionUrl), wasmLoaderUrl: absolute(wasmLoaderUrl), wasmBinaryUrl: absolute(wasmBinaryUrl), modelBuffer: buffer }, [buffer]); }
-        catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+      const workerSupported = worker && await new Promise<boolean>(resolve => {
+        const candidate = worker!;
+        const finish = (supported: boolean) => { clearTimeout(timer); active.cancelInit = undefined; resolve(supported); };
+        const timer = window.setTimeout(() => finish(false), 5000);
+        active.cancelInit = () => finish(false);
+        candidate.onmessage = ({ data }) => { if (data.id === 0) finish(data.type === "capabilities" && data.offscreenWebgl2 === true); };
+        candidate.onerror = () => finish(false);
+        try { candidate.postMessage({ id: 0, type: "probe" }); } catch { finish(false); }
       });
+      if (generation.current !== token || active.stopped) return;
+      if (worker && workerSupported) {
+        const candidate = worker;
+        await new Promise<void>((resolve, reject) => {
+          const finish = (error?: Error) => { clearTimeout(timer); active.cancelInit = undefined; error ? reject(error) : resolve(); };
+          const timer = window.setTimeout(() => finish(new Error("Pose model initialization timed out.")), 60000);
+          active.cancelInit = () => finish(new Error("Pose initialization cancelled."));
+          candidate.onmessage = ({ data }) => { if (data.id === 1) finish(data.type === "ready" ? undefined : new Error(data.message || "Pose model initialization failed.")); };
+          candidate.onerror = event => finish(new Error(event.message || "Pose worker failed."));
+          try { candidate.postMessage({ id: 1, type: "init", moduleUrl: absolute(visionUrl), wasmLoaderUrl: absolute(wasmLoaderUrl), wasmBinaryUrl: absolute(wasmBinaryUrl), modelBuffer: buffer }, [buffer]); }
+          catch (error) { finish(error instanceof Error ? error : new Error(String(error))); }
+        });
+      } else {
+        worker?.terminate(); active.worker = null;
+        const { PoseLandmarker } = await import(/* @vite-ignore */ absolute(visionUrl));
+        if (generation.current !== token || active.stopped) return;
+        const detector = await PoseLandmarker.createFromOptions(
+          { wasmLoaderPath: absolute(wasmLoaderUrl), wasmBinaryPath: absolute(wasmBinaryUrl) },
+          { baseOptions: { modelAssetBuffer: new Uint8Array(buffer), delegate: "CPU" }, canvas: document.createElement("canvas"), runningMode: "VIDEO", numPoses: 1 },
+        );
+        if (generation.current !== token || active.stopped) { detector.close(); return; }
+        active.detector = detector;
+        setCompatibility(true);
+      }
       if (generation.current !== token || active.stopped) return;
       setStatus("Requesting camera access…");
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
@@ -151,7 +179,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       video.current.srcObject = stream;
       await video.current.play();
       if (generation.current !== token || active.stopped) return;
-      worker.onmessage = ({ data }) => {
+      const handlePose = (data: { type: string; message?: string; timestampMs: number; worldLandmarks?: PoseLandmark[][] }) => {
         if (active.stopped) return;
         if (data.type === "error") { setStatus(`Pose error: ${data.message}`); stop(); return; }
         if (data.type !== "pose") return;
@@ -164,22 +192,34 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
           if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.bindings.some(binding => preview.character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
           for (const binding of preview.bindings) {
             const [a, b] = webcamSegmentPoints(active.points, binding.segment);
-            binding.bone.quaternion.copy(binding.retarget.update(a as PoseLandmark, b as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }, webcamSecondaryAxis(active.points, binding.segment)));
+            binding.bone.quaternion.copy(binding.retarget.update(a as PoseLandmark, b as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode, timeScaledSmoothing: true }, webcamSecondaryAxis(active.points, binding.segment)));
           }
           const states = preview.bindings.map(binding => binding.retarget.getTrackingState());
           setTracking(states.includes("fading") ? "fading" : states.includes("holding") ? "holding" : states.includes("lost") ? "lost" : "tracking");
           if (active.recorder?.sample(performance.now(), preview.bindings.map(binding => binding.bone.quaternion))) void finishRecording();
         } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); stop(); }
       };
-      worker.onerror = event => { if (!active.stopped) { setStatus(event.message || "Pose worker failed."); stop(); } };
+      if (active.worker) {
+        active.worker.onmessage = ({ data }) => handlePose(data);
+        active.worker.onerror = event => { if (!active.stopped) { setStatus(event.message || "Pose worker failed."); stop(); } };
+      }
+      let lastCompatibilityFrame = -Infinity;
       const frame = () => {
         if (active.stopped) return;
         active.frameId = requestAnimationFrame(frame);
         if (active.busy || !video.current || video.current.readyState < 2) return;
+        if (active.detector) {
+          const timestampMs = performance.now();
+          if (timestampMs - lastCompatibilityFrame < 100) return;
+          lastCompatibilityFrame = timestampMs;
+          try { handlePose({ type: "pose", timestampMs, worldLandmarks: active.detector.detectForVideo(video.current, timestampMs).worldLandmarks }); }
+          catch (error) { if (!active.stopped) { setStatus(`Pose error: ${String(error)}`); stop(); } }
+          return;
+        }
         active.busy = true;
         void createImageBitmap(video.current).then(bitmap => {
           if (active.stopped) { bitmap.close(); return; }
-          worker.postMessage({ id: ++active.nextId, type: "frame", frame: bitmap, timestampMs: performance.now() }, [bitmap]);
+          active.worker!.postMessage({ id: ++active.nextId, type: "frame", frame: bitmap, timestampMs: performance.now() }, [bitmap]);
         }).catch(error => { if (!active.stopped) { setStatus(`Camera frame error: ${String(error)}`); stop(); } });
       };
       active.frameId = requestAnimationFrame(frame);
@@ -188,7 +228,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       setStatus("Camera running locally. Select a limb and calibrate.");
     } catch (error) {
       if (generation.current === token) { stop(); setStatus(error instanceof Error ? error.message : String(error)); }
-      else if (current && !current.stopped) { current.worker.terminate(); current.stream?.getTracks().forEach(track => track.stop()); }
+      else if (current && !current.stopped) { current.worker?.terminate(); current.detector?.close(); current.stream?.getTracks().forEach(track => track.stop()); }
     }
   };
 
@@ -333,6 +373,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
     <label>When tracking is lost <select aria-label="When tracking is lost" className="text-black" value={lossMode} disabled={calibrated} onChange={event => setLossMode(event.target.value as "hold" | "fade")}><option value="hold">Hold last pose</option><option value="fade">Return to calibrated pose</option></select></label>
     <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />
+    {compatibility && <p>Compatibility mode is active; the preview may be slower.</p>}
     {!running && !starting ? <button type="button" disabled={!model || !boneId || saving} onClick={() => void start()}>Start local camera</button> : <button type="button" onClick={() => { stop(); setStatus("Camera stopped; preview cancelled."); }}>Stop camera</button>}
     <button type="button" disabled={!running || !boneId || recording} onClick={calibrate}>Calibrate selected bone</button>
     <button type="button" disabled={!calibrated || recording} onClick={apply}>Apply webcam pose</button>
