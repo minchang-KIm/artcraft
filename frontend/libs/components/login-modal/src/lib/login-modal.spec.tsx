@@ -76,6 +76,18 @@ describe("native login modal integration", () => {
     expect(success).not.toHaveBeenCalled();
   });
 
+  it("allows local work without pretending the user authenticated", async () => {
+    const success = vi.fn();
+    const close = vi.fn();
+    await act(async () => { render(<LoginModal allowLocalMode onClose={close} onArtCraftAuthSuccess={success} />); });
+    await act(async () => { fireEvent.click(screen.getByRole("button", { name: "Continue locally" })); });
+    expect(useLoginModalStore.getState().isOpen).toBe(false);
+    expect(close).toHaveBeenCalledOnce();
+    expect(success).not.toHaveBeenCalled();
+    await act(async () => { useLoginModalStore.getState().openModal(); });
+    expect(screen.getByRole("button", { name: "Continue locally" })).toBeTruthy();
+  });
+
   it("hides password login while preparing a challenge and cancels a late creation after Back", async () => {
     let resolve: (value: unknown) => void = () => {};
     await act(async () => { render(<LoginModal isSignUp={false} />); });

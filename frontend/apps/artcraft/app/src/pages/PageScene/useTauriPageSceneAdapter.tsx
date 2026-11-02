@@ -1,3 +1,4 @@
+import { invoke } from "@tauri-apps/api/core";
 // PageSceneAdapter implementation backed by the artcraft host's Tauri
 // + HTTP plumbing. Built once per <PageScene> mount via useMemo so the
 // reference is stable across re-renders (matters because the lib's
@@ -240,6 +241,11 @@ export const useTauriPageSceneAdapter = (
         // cancelled mid-flight — the lib's ticket guard still keeps
         // late-arriving buffers from polluting the scene, we just lose
         // the bandwidth saving in that fallback path.
+        if (url.startsWith("local-glb:")) {
+          const content = await invoke<number[]>("total_recall_asset_get", { id: url });
+          if (init?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+          return new Response(Uint8Array.from(content), { headers: { "Content-Type": "model/gltf-binary" } });
+        }
         if (init?.signal?.aborted) {
           throw new DOMException("Aborted", "AbortError");
         }
@@ -295,6 +301,7 @@ export const useTauriPageSceneAdapter = (
         addToast(level, message),
 
       getMediaUrlByToken: async (token) => {
+        if (token.startsWith("local-glb:")) return token;
         const mediaFilesApi = new MediaFilesApi();
         const response = await mediaFilesApi.GetMediaFileByToken({
           mediaFileToken: token,
@@ -307,11 +314,14 @@ export const useTauriPageSceneAdapter = (
       // fetches in parallel after a single metadata roundtrip.
       getMediaUrlsByTokens: async (tokens: string[]) => {
         if (tokens.length === 0) return {};
+        const local = Object.fromEntries(tokens.filter((token) => token.startsWith("local-glb:")).map((token) => [token, token]));
+        const remoteTokens = tokens.filter((token) => !token.startsWith("local-glb:"));
+        if (remoteTokens.length === 0) return local;
         const mediaFilesApi = new MediaFilesApi();
         const response = await mediaFilesApi.ListMediaFilesByTokens({
-          mediaTokens: tokens,
+          mediaTokens: remoteTokens,
         });
-        const urls: Record<string, string> = {};
+        const urls: Record<string, string> = { ...local };
         for (const file of response.data ?? []) {
           const cdn = file?.media_links?.cdn_url;
           if (cdn) urls[file.token] = cdn;

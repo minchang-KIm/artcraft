@@ -34,7 +34,11 @@ pub struct AppDataRoot {
 
 impl AppDataRoot {
   pub fn create_default() -> anyhow::Result<Self> {
-    let directory = get_default_data_dir()?;
+    let directory = match std::env::var_os("TOTAL_RECALL_DATA_DIR") {
+      Some(path) if path.is_empty() => return Err(anyhow!("TOTAL_RECALL_DATA_DIR cannot be empty")),
+      Some(path) => PathBuf::from(path),
+      None => get_default_data_dir()?,
+    };
     println!("App data directory: {:?}", directory);
     Self::create_existing(directory)
   }

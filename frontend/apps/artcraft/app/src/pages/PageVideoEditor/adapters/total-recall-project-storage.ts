@@ -58,7 +58,7 @@ export function createTotalRecallProjectStorage(invoke: Invoke, legacy: ProjectS
     },
     async listProjects() {
       const all = await invoke<StoredProject[]>("total_recall_project_list");
-      return all.map(({ id, name, updatedAt }): ProjectMeta => ({ id, name, updatedAt }))
+      return all.filter((project) => (project as StoredProject & { kind?: string }).kind !== "scene" && (project as StoredProject & { kind?: string }).kind !== "scene-frame" && (project as StoredProject & { kind?: string }).kind !== "scene-sequence").map(({ id, name, updatedAt }): ProjectMeta => ({ id, name, updatedAt }))
         .sort((a, b) => b.updatedAt - a.updatedAt);
     },
     async createProject(name: string) {

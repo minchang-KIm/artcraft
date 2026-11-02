@@ -281,3 +281,9 @@ export {
   SelectedCameraChangedEvent,
   CameraUpdatedEvent,
 } from "./lib/engine/events/EngineEvent";
+
+export { mhrCharacterFingerprint, replaceMhrCharacter } from "./lib/actions/replaceMhrCharacter";
+export { exportPosedCharacter } from "./lib/actions/exportPosedCharacter";
+
+export { addClipToCharacter } from "./lib/actions/timeline";
+export { validateBoneAnimation } from "./lib/engine/animation/validateBoneAnimation";

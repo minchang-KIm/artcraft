@@ -177,6 +177,7 @@ export const MainApp = ({ sceneToken }: Props) => {
         pageName="Edit Scene"
       />
       <LoginModal
+        allowLocalMode
         videoSrc2D="/resources/videos/artcraft-canvas-demo.mp4"
         videoSrc3D="/resources/videos/artcraft-3d-demo.mp4"
         onOpenChange={(isOpen: boolean) => {

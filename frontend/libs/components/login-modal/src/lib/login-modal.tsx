@@ -26,6 +26,8 @@ interface LoginModalProps {
   onOpenChange?: (isOpen: boolean) => void;
   onArtCraftAuthSuccess?: (userInfo: any) => void;
   isSignUp?: boolean;
+  /** Allow access to local-only tools without an account. */
+  allowLocalMode?: boolean;
   /** Optional direct media URL for the right-pane showcase video. */
   videoUrl?: string;
   // Accepted for backwards compatibility with existing call sites (MainApp
@@ -39,6 +41,7 @@ export function LoginModal({
   onOpenChange,
   onArtCraftAuthSuccess,
   isSignUp: initialIsSignUp = true,
+  allowLocalMode = false,
   videoUrl = DEFAULT_SHOWCASE_VIDEO,
 }: LoginModalProps) {
   const { isOpen, recheckTrigger, closeModal } = useLoginModalStore();
@@ -99,6 +102,7 @@ export function LoginModal({
   }, [loggedInUsername, isOpen, closeModal]);
 
   const handleClose = () => {
+    authGeneration.current += 1;
     closeModal();
     onClose?.();
   };
@@ -241,7 +245,7 @@ export function LoginModal({
                   renderOnboarding()
                 ) : (
                   <>
-                    {/* ── Form pane ── (no dismiss control — login is required) */}
+                    {/* ── Form pane ── */}
                     <div className="relative flex w-full flex-col lg:w-1/2">
                       <div className="flex flex-1 flex-col justify-center px-6 py-10 sm:px-10 sm:py-12">
                         <div className="w-full">
@@ -284,6 +288,11 @@ export function LoginModal({
                             errorMessage={errorMessage}
                             isLoading={isLoading}
                           />}
+                          {allowLocalMode && (
+                            <button type="button" className="mt-5 w-full rounded border border-white/30 px-4 py-2 text-sm text-white focus-visible:outline focus-visible:outline-2 focus-visible:outline-white" onClick={handleClose}>
+                              Continue locally
+                            </button>
+                          )}
                         </div>
                       </div>
 

@@ -138,7 +138,7 @@ export class StoryTellerProxyScene {
     // sequential chain.
     const mediaTokens = scene_json
       .map((j) => j.media_file_token)
-      .filter((t) => t.startsWith("m_"));
+      .filter((t) => t.startsWith("m_") || t.startsWith("local-glb:"));
     if (mediaTokens.length > 0) {
       await this.scene.warmMediaURLs(mediaTokens);
     }
@@ -184,7 +184,7 @@ export class StoryTellerProxyScene {
         if (token === "DirectionalLight") {
           return { json_object, obj: this.scene._create_base_lighting() };
         }
-        if (token.includes("m_")) {
+        if (token.includes("m_") || token.startsWith("local-glb:")) {
           const obj = await this.scene.loadObject(
             token,
             json_object.object_name,

@@ -41,6 +41,7 @@ import {
   GridVisibleChangedEvent,
   CameraViewToggleRequestedEvent,
   InspectorPanelChangedEvent,
+  ObjectAddedEvent,
   OutlinerRefreshedEvent,
   PoseModeChangedEvent,
   SceneLoadedEvent,
@@ -712,7 +713,8 @@ class Editor {
   }
 
   // Captures the scene without the grid
-  public snapShotOfCurrentFrame(shouldDownload: boolean = true) {
+  public snapShotOfCurrentFrame(shouldDownload: boolean = true, maxEdge?: number) {
+    if (maxEdge !== undefined && (!Number.isInteger(maxEdge) || maxEdge < 2)) throw new Error("Invalid snapshot size limit.");
     const camera = this.cameraController.camera;
     const renderCamera = this.cameraController.render_camera;
     if (!this.renderer?.domElement || !camera) {
@@ -773,6 +775,15 @@ class Editor {
         break;
     }
 
+    // Optional downscale is applied before rendering, avoiding a full-size
+    // PNG and preserving even dimensions required by video encoders.
+    if (maxEdge !== undefined && Math.max(targetWidth, targetHeight) > maxEdge) {
+      const scale = maxEdge / Math.max(targetWidth, targetHeight);
+      targetWidth = Math.max(2, Math.round(targetWidth * scale / 2) * 2);
+      targetHeight = Math.max(2, Math.round(targetHeight * scale / 2) * 2);
+      aspectRatio = targetWidth / targetHeight;
+    }
+
     // Store original renderer and camera state
     const sizeVector = new THREE.Vector2();
     this.renderer.getSize(sizeVector);
@@ -784,74 +795,82 @@ class Editor {
     const originalRenderCameraAspect =
       renderCamera?.aspect || originalCameraAspect;
 
-    // The camera-view framing offset maps the render frame into an inset
-    // rect of the viewport canvas — it must not leak into the snapshot,
-    // which renders the frame full-bleed at the target resolution.
-    // CameraController.applyFrameProjection reapplies it afterwards.
-    if (camera.view?.enabled) {
-      camera.clearViewOffset();
+    let snapshot: string;
+    try {
+      // The camera-view framing offset maps the render frame into an inset
+      // rect of the viewport canvas — it must not leak into the snapshot,
+      // which renders the frame full-bleed at the target resolution.
+      // CameraController.applyFrameProjection reapplies it afterwards.
+      if (camera.view?.enabled) {
+        camera.clearViewOffset();
+      }
+
+      // Temporarily set renderer to high resolution
+      this.renderer.setSize(targetWidth, targetHeight, false);
+      this.renderer.setPixelRatio(1);
+
+      // Update camera for the new aspect ratio
+      camera.aspect = aspectRatio;
+      camera.updateProjectionMatrix();
+
+      // If using render camera, update it too
+      if (renderCamera) {
+        renderCamera.aspect = aspectRatio;
+        renderCamera.updateProjectionMatrix();
+      }
+
+      // Re-render the scene at high resolution
+      if (this.postProcessing.composer) {
+        this.postProcessing.composer.setSize(targetWidth, targetHeight);
+        this.postProcessing.composer.render();
+      } else {
+        this.renderer.render(this.activeScene.scene, camera);
+      }
+
+      // Get the high resolution snapshot
+      snapshot = this.renderer.domElement.toDataURL("image/png", 1.0);
+
+    } finally {
+      try {
+        // Restore original camera aspect
+        camera.aspect = originalCameraAspect;
+        camera.updateProjectionMatrix();
+
+        // Restore render camera if it exists
+        if (renderCamera) {
+          renderCamera.aspect = originalRenderCameraAspect;
+          renderCamera.updateProjectionMatrix();
+        }
+
+        // Restore original renderer size and pixel ratio
+        this.renderer.setSize(originalWidth, originalHeight, false);
+        this.renderer.setPixelRatio(originalPixelRatio);
+
+        // Reapply the camera-view framing offset (if active) before the
+        // restore render so the viewport doesn't flash an unframed frame.
+        this.cameraController.applyFrameProjection();
+
+        // Re-render at original resolution
+        if (this.postProcessing.composer) {
+          this.postProcessing.composer.setSize(originalWidth, originalHeight);
+          this.postProcessing.composer.render();
+        } else {
+          this.renderer.render(this.activeScene.scene, camera);
+        }
+
+      } finally {
+        // Restore grid visibility
+        this.bus.emit(new GridVisibleChangedEvent(wasGridVisible));
+
+        // Restore transform controls visibility
+        this.gizmo.setVisible(wasControlVisible);
+
+        // Restore outline overlay + splat bbox
+        selectionPass?.setOutlineSuppressed(false);
+
+      }
     }
-
-    // Temporarily set renderer to high resolution
-    this.renderer.setSize(targetWidth, targetHeight, false);
-    this.renderer.setPixelRatio(1);
-
-    // Update camera for the new aspect ratio
-    camera.aspect = aspectRatio;
-    camera.updateProjectionMatrix();
-
-    // If using render camera, update it too
-    if (renderCamera) {
-      renderCamera.aspect = aspectRatio;
-      renderCamera.updateProjectionMatrix();
-    }
-
-    // Re-render the scene at high resolution
-    if (this.postProcessing.composer) {
-      this.postProcessing.composer.setSize(targetWidth, targetHeight);
-      this.postProcessing.composer.render();
-    } else {
-      this.renderer.render(this.activeScene.scene, camera);
-    }
-
-    // Get the high resolution snapshot
-    const snapshot = this.renderer.domElement.toDataURL("image/png", 1.0);
     const base64Snapshot = snapshot.split(",")[1];
-
-    // Restore original camera aspect
-    camera.aspect = originalCameraAspect;
-    camera.updateProjectionMatrix();
-
-    // Restore render camera if it exists
-    if (renderCamera) {
-      renderCamera.aspect = originalRenderCameraAspect;
-      renderCamera.updateProjectionMatrix();
-    }
-
-    // Restore original renderer size and pixel ratio
-    this.renderer.setSize(originalWidth, originalHeight, false);
-    this.renderer.setPixelRatio(originalPixelRatio);
-
-    // Reapply the camera-view framing offset (if active) before the
-    // restore render so the viewport doesn't flash an unframed frame.
-    this.cameraController.applyFrameProjection();
-
-    // Re-render at original resolution
-    if (this.postProcessing.composer) {
-      this.postProcessing.composer.setSize(originalWidth, originalHeight);
-      this.postProcessing.composer.render();
-    } else {
-      this.renderer.render(this.activeScene.scene, camera);
-    }
-
-    // Restore grid visibility
-    this.bus.emit(new GridVisibleChangedEvent(wasGridVisible));
-
-    // Restore transform controls visibility
-    this.gizmo.setVisible(wasControlVisible);
-
-    // Restore outline overlay + splat bbox
-    selectionPass?.setOutlineSuppressed(false);
 
     if (shouldDownload) {
       const link = document.createElement("a");
@@ -922,10 +941,19 @@ class Editor {
   // JSON-string deserialization path used on initial mount.
   public async applyJson(jsonString: string) {
     const result = await this.save_manager.loadCache(jsonString);
-    if (!result.applied) return;
+    if (!result.applied) return result;
     this.history.clear();
     this.bus.emit(new SceneResetEvent());
+    // Rebuild the derived scene store using restored IDs before refreshing
+    // the outliner and timeline. The load path creates new THREE objects.
+    for (const object of this.activeScene.scene.children) {
+      const mediaId = object.userData.media_id;
+      if (typeof mediaId !== "string") continue;
+      const kind = object.userData.isCharacter ? "character" : object.userData.isShape ? "shape" : "object";
+      this.bus.emit(new ObjectAddedEvent({ id: object.uuid, kind, name: object.name, mediaId }));
+    }
     this.selection.refreshOutliner();
+    return result;
   }
 
   public async saveScene({

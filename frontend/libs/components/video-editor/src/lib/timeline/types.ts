@@ -1,3 +1,9 @@
+import type { SceneAudioReference } from "../../../../../../../../../contracts/scene-audio";
+import type { SceneSequenceReference } from "../../../../../../../../../contracts/scene-sequence";
+import type { SceneFrameReference } from "../../../../../../../../../contracts/scene-frame";
+import type { LegacyVoiceReference } from "../../../../../../../../../contracts/legacy-voice";
+import type { LegacyDialogueReference } from "../../../../../../../../../contracts/legacy-dialogue";
+import type { MockVoiceGeneration } from "../../../../../../../../../contracts/mock-voice-generation";
 import type { ElementAnimations } from "../animation/types";
 import type { Effect } from "../effects/types";
 import type { Mask } from "../masks/types";
@@ -87,6 +93,9 @@ export interface RetimeConfig {
 interface BaseAudioElement extends BaseTimelineElement {
   type: "audio";
   buffer?: AudioBuffer;
+  mockVoiceGeneration?: MockVoiceGeneration;
+  sceneAudio?: SceneAudioReference;
+  legacyVoice?: LegacyVoiceReference;
   retime?: RetimeConfig;
 }
 
@@ -116,6 +125,7 @@ interface BaseTimelineElement {
 
 export interface VideoElement extends BaseTimelineElement {
   type: "video";
+  sceneSequence?: SceneSequenceReference;
   mediaId: string;
   isSourceAudioEnabled?: boolean;
   hidden?: boolean;
@@ -126,6 +136,7 @@ export interface VideoElement extends BaseTimelineElement {
 
 export interface ImageElement extends BaseTimelineElement {
   type: "image";
+  sceneFrame?: SceneFrameReference;
   mediaId: string;
   hidden?: boolean;
   effects?: Effect[];
@@ -134,6 +145,7 @@ export interface ImageElement extends BaseTimelineElement {
 
 export interface TextElement extends BaseTimelineElement {
   type: "text";
+  legacyDialogue?: LegacyDialogueReference;
   hidden?: boolean;
   effects?: Effect[];
 }

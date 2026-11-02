@@ -62,13 +62,13 @@ export class HistoryManager {
   }
 
   async undo(): Promise<void> {
-    return (this.serializing = this.serializing.then(() =>
+    return (this.serializing = this.serializing.catch(() => undefined).then(() =>
       this.undoInternal(),
     ));
   }
 
   async redo(): Promise<void> {
-    return (this.serializing = this.serializing.then(() =>
+    return (this.serializing = this.serializing.catch(() => undefined).then(() =>
       this.redoInternal(),
     ));
   }
@@ -79,6 +79,10 @@ export class HistoryManager {
     this.isReplaying = true;
     try {
       await action.revert();
+    } catch (error) {
+      this.past.push(action);
+      this.notifyChange();
+      throw error;
     } finally {
       this.isReplaying = false;
     }
@@ -92,6 +96,10 @@ export class HistoryManager {
     this.isReplaying = true;
     try {
       await action.apply();
+    } catch (error) {
+      this.future.push(action);
+      this.notifyChange();
+      throw error;
     } finally {
       this.isReplaying = false;
     }

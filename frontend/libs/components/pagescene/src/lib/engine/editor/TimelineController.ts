@@ -101,6 +101,10 @@ export class TimelineController {
     return this.playhead;
   }
 
+  getIsPlaying(): boolean {
+    return this.isPlaying;
+  }
+
   // ─── lifecycle ────────────────────────────────────────────────────────
 
   create(): void {

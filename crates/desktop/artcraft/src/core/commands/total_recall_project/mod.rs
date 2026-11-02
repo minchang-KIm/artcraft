@@ -1,9 +1,18 @@
+pub mod asset_get;
+pub mod asset_put;
 pub mod create;
 pub mod delete;
 pub mod exists;
+pub mod export_glb;
+pub mod export_snapshot;
 pub mod list;
 pub mod load;
+pub mod mhr_generate;
+pub mod prepare_webtoon;
+pub mod media;
 pub mod restore;
+pub mod render_video;
+pub mod scene_sequence;
 pub mod save;
 
 use crate::core::state::data_dir::app_data_root::AppDataRoot;

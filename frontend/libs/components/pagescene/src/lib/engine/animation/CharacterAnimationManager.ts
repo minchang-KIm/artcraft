@@ -1,3 +1,4 @@
+import { validateBoneAnimation } from "./validateBoneAnimation";
 // Drives skeletal (Mixamo) animation clips placed on the timeline as clip
 // lanes. Each character gets one THREE.AnimationMixer; each clip lane becomes
 // an AnimationAction on that mixer. Playback is DETERMINISTIC and playhead-
@@ -242,6 +243,56 @@ export class CharacterAnimationManager {
     this.restPoses.clear();
   }
 
+  /** Copy the mixer's captured rest pose to an untouched clone without changing the live rig. */
+  copyRestPoseTo(uuid: string, clone: THREE.Object3D): boolean {
+    const root = this.findObject(uuid);
+    const rest = this.restPoses.get(uuid);
+    if (!root || !rest) return false;
+    const pairs = new Map<THREE.Object3D, THREE.Object3D>();
+    const walk = (a: THREE.Object3D, b: THREE.Object3D): boolean => {
+      if (a.type !== b.type || a.name !== b.name || a.children.length !== b.children.length) return false;
+      pairs.set(a, b);
+      return a.children.every((child, i) => walk(child, b.children[i]));
+    };
+    if (!walk(root, clone) || rest.some((entry) => !pairs.has(entry.node))) return false;
+    for (const entry of rest) {
+      const node = pairs.get(entry.node)!;
+      node.position.copy(entry.position); node.quaternion.copy(entry.quaternion); node.scale.copy(entry.scale);
+    }
+    clone.updateMatrixWorld(true);
+    return true;
+  }
+
+  /** Refuse capture until every live motion lane is loaded and bindable. */
+  assertReadyForCapture(lanes: ClipLane[]): void {
+    for (const lane of lanes) {
+      const runtime = this.lanes.get(lane.id);
+      if (!runtime?.action || !runtime.boundRoot || !validateBoneAnimation(runtime.action.getClip(), runtime.boundRoot)) {
+        throw new Error("An animation clip is unavailable, still loading, or incompatible with the character.");
+      }
+    }
+  }
+
+  /** Prepare an isolated export mixer and reject missing or unsupported bindings. */
+  async prepareForExport(lanes: ClipLane[]): Promise<number[]> {
+    await Promise.all(lanes.map((lane) => this.addLane(lane)));
+    const boundaries: number[] = [];
+    for (const lane of lanes) {
+      const runtime = this.lanes.get(lane.id);
+      if (!runtime?.action || !runtime.boundRoot) throw new Error("An animation clip is unavailable or incompatible with the character.");
+      if (!validateBoneAnimation(runtime.action.getClip(), runtime.boundRoot)) {
+        throw new Error("This animation has unsupported or unbound tracks.");
+      }
+      boundaries.push(runtime.startTime, runtime.startTime + runtime.stripDuration);
+      if (runtime.loop && runtime.clipDuration > 0) {
+        const loops = Math.floor(runtime.stripDuration / runtime.clipDuration);
+        if (loops > 10000) throw new Error("Too many animation loops to export.");
+        for (let i = 1; i <= loops; i++) boundaries.push(runtime.startTime + i * runtime.clipDuration);
+      }
+    }
+    return boundaries;
+  }
+
   // ─── internals ────────────────────────────────────────────────────────
 
   private async addLane(lane: ClipLane): Promise<void> {
@@ -321,7 +372,8 @@ export class CharacterAnimationManager {
       if (this.loadTokens.get(lane.id) !== token || !this.lanes.has(lane.id)) {
         return;
       }
-      clip = glb?.animations?.[0];
+      // Each strip needs its own action even when the loader caches a GLB.
+      clip = glb?.animations?.[0]?.clone();
       if (!clip) {
         console.warn(
           "Animation clip has no animations track:",

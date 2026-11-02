@@ -15,6 +15,7 @@ import { authentication, scene } from "~/signals";
 import { getCurrentLocationWithoutParams } from "~/utilities";
 import { useTauriPageSceneAdapter } from "./useTauriPageSceneAdapter";
 import { LocalCharacterPreview } from "./LocalCharacterPreview";
+import { LocalSceneTools } from "./LocalSceneTools";
 
 export const PageScene = ({ sceneToken }: { sceneToken?: string }) => {
   // Tab-cache plumbing. Stage3D is single-instance and tab-agnostic;
@@ -80,6 +81,7 @@ export const PageScene = ({ sceneToken }: { sceneToken?: string }) => {
   return (
     <div className="relative w-screen" style={{ height: "calc(100vh - 56px)" }}>
       <LocalCharacterPreview />
+      <LocalSceneTools />
       <Stage3D
         adapter={adapter}
         sceneToken={sceneToken}

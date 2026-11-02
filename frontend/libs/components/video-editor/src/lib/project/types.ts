@@ -1,3 +1,4 @@
+import type { LegacyWebtoonSource } from "../../../../../../../../../contracts/legacy-webtoon-source";
 import type { FrameRate } from "opencut-wasm";
 import type { TScene } from "../timeline/types";
 import type { MediaTime } from "../wasm";
@@ -48,6 +49,7 @@ export interface TProject {
   settings: TProjectSettings;
   version: number;
   timelineViewState?: TTimelineViewState;
+  legacyWebtoonSource?: LegacyWebtoonSource;
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

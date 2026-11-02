@@ -1247,3 +1247,7 @@ export type {
   StickerResolveOptions,
   StickerSearchResult,
 } from "./lib/stickers";
+
+export { measureTextElement } from "./lib/text/measure-element";
+
+export { resolveOpacityAtTime } from "./lib/animation/values";
