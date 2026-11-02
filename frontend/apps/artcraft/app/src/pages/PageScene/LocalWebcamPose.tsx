@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark, type TrackingState } from "@storyteller/ui-pagescene";
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
+import { WEBCAM_SEGMENTS as SEGMENTS, webcamSegmentPoints } from "./webcam-landmarks";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -14,11 +15,6 @@ const MODEL_HASHES = new Set([
   "5134a3aad27a58b93da0088d431f366da362b44e3ccfbe3462b3827a839011b1",
   "64437af838a65d18e5ba7a0d39b465540069bc8aae8308de3e318aad31fcbc7b",
 ]);
-const SEGMENTS = [
-  ["Left upper arm", 11, 13], ["Left forearm", 13, 15], ["Right upper arm", 12, 14], ["Right forearm", 14, 16],
-  ["Left thigh", 23, 25], ["Left lower leg", 25, 27], ["Right thigh", 24, 26], ["Right lower leg", 26, 28],
-] as const;
-
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
 type BoundBone = { bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
 type Preview = { editor: Editor; character: Object3D; bindings: BoundBone[]; lossMode: "hold" | "fade" };
@@ -167,8 +163,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
           const selected = preview.editor.sceneManager?.selected_objects;
           if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.bindings.some(binding => preview.character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
           for (const binding of preview.bindings) {
-            const [, a, b] = SEGMENTS[binding.segment];
-            binding.bone.quaternion.copy(binding.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
+            const [a, b] = webcamSegmentPoints(active.points, binding.segment);
+            binding.bone.quaternion.copy(binding.retarget.update(a as PoseLandmark, b as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
           }
           const states = preview.bindings.map(binding => binding.retarget.getTrackingState());
           setTracking(states.includes("fading") ? "fading" : states.includes("holding") ? "holding" : states.includes("lost") ? "lost" : "tracking");
@@ -217,8 +213,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
         const bone = character.getObjectByProperty("uuid", item.boneId);
         if (!bone || bone.type !== "Bone" || !bone.parent || !SEGMENTS[item.segment]) throw new Error("Select a valid bone and limb.");
         const before = bone.quaternion.clone();
-        const [, a, b] = SEGMENTS[item.segment];
-        return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(current.points?.[a] as PoseLandmark, current.points?.[b] as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror) };
+        const [a, b] = webcamSegmentPoints(current.points, item.segment);
+        return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(a as PoseLandmark, b as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror) };
       });
       bindings.sort((a, b) => bonePath(character, a.bone).length - bonePath(character, b.bone).length);
       current.preview = { editor, character, bindings, lossMode };
@@ -316,9 +312,9 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
 
   return <details className="max-w-72">
     <summary>Local webcam pose (experimental)</summary>
-    <p>Camera frames stay on this device. Map each chosen bone to a different limb.</p>
+    <p>Camera frames stay on this device. Map each chosen bone to a different body segment.</p>
     <label>Pose model <input aria-label="Pose model" type="file" accept=".task" disabled={running || starting} onChange={event => setModel(event.currentTarget.files?.[0] ?? null)} /></label>
-    <label>Mapping scope <select aria-label="Webcam mapping scope" className="text-black" value={mappingScope} disabled={calibrated} onChange={event => setMappingScope(event.target.value as MappingScope)}><option value="all">All limbs</option><option value="left-arm">Left arm</option><option value="right-arm">Right arm</option><option value="left-leg">Left leg</option><option value="right-leg">Right leg</option></select></label>
+    <label>Mapping scope <select aria-label="Webcam mapping scope" className="text-black" value={mappingScope} disabled={calibrated} onChange={event => setMappingScope(event.target.value as MappingScope)}><option value="all">All limbs</option><option value="upper-body">Upper body</option><option value="full-body">Full body</option><option value="left-arm">Left arm</option><option value="right-arm">Right arm</option><option value="left-leg">Left leg</option><option value="right-leg">Right leg</option></select></label>
     <button type="button" disabled={calibrated || saving || !bones.length} onClick={suggestMappings}>Suggest bone mappings</button>
     <label>Bone <select aria-label="Webcam bone" className="max-w-48 text-black" value={boneId} disabled={calibrated} onChange={event => setBoneId(event.target.value)}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
     <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>

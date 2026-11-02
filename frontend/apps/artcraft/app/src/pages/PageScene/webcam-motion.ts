@@ -12,7 +12,7 @@ export class WebcamMotionRecorder {
   private lastTimestamp: number;
   constructor(private readonly startMs: number, initial: Quaternion | Quaternion[], private readonly maxSeconds = MAX_SECONDS) {
     const poses = Array.isArray(initial) ? initial : [initial];
-    if (!Number.isFinite(startMs) || !poses.length || poses.length > 8 || !poses.every(validQuaternion) || !Number.isFinite(maxSeconds) || maxSeconds < 0.1 || maxSeconds > MAX_SECONDS) throw new Error("Invalid initial pose or recording duration.");
+    if (!Number.isFinite(startMs) || !poses.length || poses.length > 9 || !poses.every(validQuaternion) || !Number.isFinite(maxSeconds) || maxSeconds < 0.1 || maxSeconds > MAX_SECONDS) throw new Error("Invalid initial pose or recording duration.");
     this.last = poses.map(pose => pose.clone().normalize());
     this.lastTimestamp = startMs;
     this.rotations = this.last.map(pose => pose.toArray());
@@ -49,7 +49,7 @@ function validQuaternion(q: Quaternion): boolean {
 /** Export animation-only GLB tracks that bind uniquely to the rig. */
 export async function encodeWebcamMotion(character: Object3D, bone: Object3D | Object3D[], recorder: WebcamMotionRecorder): Promise<{ data: ArrayBuffer; duration: number }> {
   const bones = Array.isArray(bone) ? bone : [bone];
-  if (!bones.length || bones.length > 8 || new Set(bones).size !== bones.length) throw new Error("Select distinct bones.");
+  if (!bones.length || bones.length > 9 || new Set(bones).size !== bones.length) throw new Error("Select distinct bones.");
   for (const item of bones) {
     if (!character.getObjectByProperty("uuid", item.uuid) || item.type !== "Bone" || !item.name || PropertyBinding.sanitizeNodeName(item.name) !== item.name) throw new Error("The selected bone needs a glTF-compatible name.");
     let matches = 0;

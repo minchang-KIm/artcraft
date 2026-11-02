@@ -48,4 +48,13 @@ describe("webcam motion", () => {
     for (const track of loaded.animations[0].tracks) expect(Array.from(track.times)).toEqual([0, Math.fround(0.1)]);
     await expect(encodeWebcamMotion(root, [upper, upper], recorder)).rejects.toThrow(/distinct/);
   });
+  it("supports a nine-bone body recording and rejects an extra track", async () => {
+    const root = new Object3D();
+    const bones = Array.from({ length: 9 }, (_, index) => { const bone = new Bone(); bone.name = `Bone${index}`; root.add(bone); return bone; });
+    const recorder = new WebcamMotionRecorder(0, bones.map(() => new Quaternion()));
+    recorder.sample(200, bones.map((_, index) => new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), index / 20)));
+    const result = await encodeWebcamMotion(root, bones, recorder);
+    expect((await new GLTFLoader().parseAsync(result.data, "")).animations[0].tracks).toHaveLength(9);
+    expect(() => new WebcamMotionRecorder(0, Array.from({ length: 10 }, () => new Quaternion()))).toThrow();
+  });
 });

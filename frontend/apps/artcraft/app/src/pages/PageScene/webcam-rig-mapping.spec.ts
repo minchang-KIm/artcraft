@@ -25,4 +25,17 @@ describe("webcam rig mapping suggestions", () => {
     const partial = new Group(); partial.add(upper);
     expect(suggestWebcamMappings(partial, "left-arm").mappings).toEqual([]);
   });
+  it("suggests a torso only when it is an unambiguous ancestor of both arms", () => {
+    const root = new Group(), spine = new Bone(); spine.name = "c_spine0"; root.add(spine);
+    const left = new Bone(), right = new Bone(), lf = new Bone(), rf = new Bone();
+    left.name = "l_uparm"; right.name = "r_uparm"; lf.name = "l_lowarm"; rf.name = "r_lowarm";
+    spine.add(left, right); left.add(lf); right.add(rf);
+    const upper = suggestWebcamMappings(root, "upper-body");
+    expect(upper.mappings.map(item => item.segment)).toEqual([8, 0, 1, 2, 3]);
+    expect(upper.mappings[0].boneId).toBe(spine.uuid);
+    root.add(right);
+    expect(suggestWebcamMappings(root, "upper-body").unavailable).toContain("torso");
+    spine.add(right); const duplicate = new Bone(); duplicate.name = "c_spine0"; root.add(duplicate);
+    expect(suggestWebcamMappings(root, "upper-body").unavailable).toContain("torso");
+  });
 });
