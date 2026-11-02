@@ -2,8 +2,9 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SceneAudioClip, SequenceAudioClip } from "../../../../../../../../../contracts/scene-audio";
 import { wavDuration } from "./wav-duration";
+import { SceneAudioPreview } from "./scene-audio-preview";
 import { useTabStore } from "~/pages/Stores/TabState";
-import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
+import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
 type SceneDocument = { id: string; revision: number; kind: "scene"; name: string; updatedAt: number; data: unknown; generatedAssets?: Record<string, unknown>; mhrIdentityDraft?: number[]; sceneAudio?: SceneAudioClip[] };
 const MAX_BYTES = 50 * 1024 * 1024;
@@ -26,6 +27,8 @@ export function LocalSceneTools() {
   const [captureResolution, setCaptureResolution] = useState("native");
   const [audioStart, setAudioStart] = useState("0");
   const [sceneAudio, setSceneAudio] = useState<SceneAudioClip[]>([]);
+  const [audioPreviewEnabled, setAudioPreviewEnabled] = useState(false);
+  const audioPreview = useRef<SceneAudioPreview | null>(null);
   const [sceneName, setSceneName] = useState("Local 3D scene");
   const [scenes, setScenes] = useState<SceneDocument[]>([]);
   const [selectedSceneId, setSelectedSceneId] = useState("");
@@ -47,6 +50,7 @@ export function LocalSceneTools() {
     if (!editorInitialized || !editor) return;
     return editor.bus.subscribe(SceneResetEvent, () => {
       sceneEpoch.current += 1;
+      audioPreview.current?.setClips([]);
       current.current = undefined;
       generatedAssets.current = {};
       setSceneAudio([]);
@@ -54,6 +58,37 @@ export function LocalSceneTools() {
       setIdentityIndex(0);
     });
   }, [editorInitialized]);
+  useEffect(() => {
+    const editor = getActiveEditor();
+    if (!editorInitialized || !editor) return;
+    const preview = new SceneAudioPreview(async id => {
+      const [mime, content] = await invoke<[string, number[]]>("total_recall_media_get", { id });
+      if (mime !== "audio/wav") throw new Error("Scene audio is not a WAV file.");
+      const bytes = Uint8Array.from(content);
+      wavDuration(bytes);
+      return bytes.buffer;
+    }, message => setMessage(`Error: ${message}`));
+    audioPreview.current = preview;
+    setAudioPreviewEnabled(false);
+    preview.sync(editor.timelineController.getPlayhead(), editor.timelineController.getIsPlaying());
+    const unsubscribe = editor.bus.subscribe(TimelinePlayheadEvent, (event: { playhead: number; isPlaying: boolean }) => preview.sync(event.playhead, event.isPlaying));
+    return () => {
+      unsubscribe();
+      preview.dispose();
+      if (audioPreview.current === preview) audioPreview.current = null;
+    };
+  }, [editorInitialized]);
+  useEffect(() => { audioPreview.current?.setClips(sceneAudio); }, [sceneAudio, editorInitialized]);
+  const enableAudioPreview = async () => {
+    const preview = audioPreview.current;
+    if (!preview) return;
+    try {
+      await preview.enable();
+      if (audioPreview.current === preview) setAudioPreviewEnabled(true);
+    } catch (error) {
+      if (audioPreview.current === preview) setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  };
   useEffect(() => () => {
     const job = captureJob.current;
     if (job?.acceptingCancel) {
@@ -341,6 +376,7 @@ export function LocalSceneTools() {
       <button type="button" disabled={busy} onClick={() => void captureFrame()}>Capture frame for video</button>
       <label>Scene audio start (seconds) <input aria-label="Scene audio start" type="number" min={0} step="any" className="w-20 text-black" value={audioStart} disabled={busy} onChange={(event) => setAudioStart(event.target.value)} /></label>
       <label className="cursor-pointer rounded px-2 py-1">Add scene WAV<input aria-label="Add scene WAV" type="file" accept=".wav,audio/wav" className="sr-only" disabled={busy} onChange={(event) => { void addSceneAudio(event.target.files?.[0]); event.target.value = ""; }} /></label>
+      {audioPreviewEnabled ? <button type="button" onClick={() => { audioPreview.current?.disable(); setAudioPreviewEnabled(false); }}>Disable scene audio preview</button> : <button type="button" onClick={() => void enableAudioPreview()}>Enable scene audio preview</button>}
       {sceneAudio.map(clip => <div key={clip.id} className="max-w-72">{clip.name} · {clip.start.toFixed(2)}s · {clip.duration.toFixed(2)}s <button type="button" disabled={busy} aria-label={`Remove ${clip.name}`} onClick={() => setSceneAudio(previous => previous.filter(item => item.id !== clip.id))}>Remove</button></div>)}
       <label>Capture resolution <select aria-label="3D capture resolution" className="text-black" value={captureResolution} disabled={busy} onChange={(event) => setCaptureResolution(event.target.value)}><option value="native">Native</option><option value="1280">Max 1280 px</option><option value="640">Max 640 px</option></select></label>
       <label>Capture start (seconds) <input aria-label="3D capture start" type="number" min={0} step="any" className="w-20 text-black" value={captureStart} disabled={busy} placeholder="0" onChange={(event) => setCaptureStart(event.target.value)} /></label>

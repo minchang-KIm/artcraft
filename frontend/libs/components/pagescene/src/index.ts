@@ -259,6 +259,7 @@ export {
   EngineInitializedEvent,
   SceneLoadedEvent,
   SceneResetEvent,
+  TimelinePlayheadEvent,
   SelectionChangedEvent,
   InspectorPanelChangedEvent,
   ObjectAddedEvent,
