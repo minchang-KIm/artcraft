@@ -1,7 +1,6 @@
 use crate::core::commands::total_recall_project::{database_path, with_store};
 use crate::core::state::data_dir::app_data_root::AppDataRoot;
 use std::collections::HashMap;
-use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -64,7 +63,7 @@ pub fn total_recall_scene_sequence_abort(job_id: String) -> Result<(), String> {
 
 #[tauri::command]
 pub async fn total_recall_scene_sequence_finish(app_data_root: State<'_, AppDataRoot>, job_id: String) -> Result<serde_json::Value, String> {
-  let ffmpeg = std::env::var_os("TOTAL_RECALL_RENDER_FFMPEG").filter(|v| !v.is_empty()).map(PathBuf::from).ok_or("Local render is not configured: TOTAL_RECALL_RENDER_FFMPEG is missing")?;
+  let ffmpeg = super::worker_settings::configured(&app_data_root, "TOTAL_RECALL_RENDER_FFMPEG")?;
   let (job, cancelled) = {
     let mut jobs = sequences().lock().map_err(|_| "Sequence registry unavailable")?;
     let entry = jobs.get_mut(&job_id).ok_or("Sequence not found")?;

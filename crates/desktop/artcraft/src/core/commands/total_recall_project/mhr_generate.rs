@@ -1,14 +1,9 @@
 use crate::core::commands::total_recall_project::{database_path, with_store};
 use crate::core::state::data_dir::app_data_root::AppDataRoot;
-use std::path::PathBuf;
+use super::worker_settings::configured;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri::State;
-
-fn configured_path(key: &str) -> Result<PathBuf, String> {
-  std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
-    .ok_or_else(|| format!("MHR is not configured: {key} is missing"))
-}
 
 /// Run only the configured local worker; no executable or path comes from the UI.
 #[tauri::command]
@@ -16,10 +11,10 @@ pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, id
   if identity.len() != 45 || identity.iter().any(|v| !v.is_finite() || !(-3.0..=3.0).contains(v)) {
     return Err("MHR identity must contain 45 finite values between -3 and 3".into());
   }
-  let python = configured_path("TOTAL_RECALL_MHR_PYTHON")?;
-  let worker = configured_path("TOTAL_RECALL_MHR_WORKER")?;
-  let model = configured_path("TOTAL_RECALL_MHR_MODEL")?;
-  let root = configured_path("TOTAL_RECALL_MHR_ROOT")?;
+  let python = configured(&app_data_root, "TOTAL_RECALL_MHR_PYTHON")?;
+  let worker = configured(&app_data_root, "TOTAL_RECALL_MHR_WORKER")?;
+  let model = configured(&app_data_root, "TOTAL_RECALL_MHR_MODEL")?;
+  let root = configured(&app_data_root, "TOTAL_RECALL_MHR_ROOT")?;
   let path = database_path(&app_data_root);
   let (bytes, provenance) = tauri::async_runtime::spawn_blocking(move || -> Result<_, String> {
     let temp = tempfile::tempdir().map_err(|e| e.to_string())?;

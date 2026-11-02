@@ -1,14 +1,12 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri_plugin_dialog::DialogExt;
+use tauri::State;
+use crate::core::state::data_dir::app_data_root::AppDataRoot;
+use super::worker_settings::configured;
 
 const MAX_IMPORT_BYTES: u64 = 150 * 1024 * 1024;
-
-fn configured_path(key: &str) -> Result<PathBuf, String> {
-  std::env::var_os(key).filter(|value| !value.is_empty()).map(PathBuf::from)
-    .ok_or_else(|| format!("Webtoon import is not configured: {key} is missing"))
-}
 
 fn prepare(python: &Path, worker: &Path, source: &Path) -> Result<String, String> {
   let directory = tempfile::tempdir().map_err(|error| error.to_string())?;
@@ -49,9 +47,9 @@ fn prepare(python: &Path, worker: &Path, source: &Path) -> Result<String, String
 
 /// The source path comes only from the native file picker, never from the WebView.
 #[tauri::command]
-pub async fn total_recall_prepare_webtoon(app: tauri::AppHandle) -> Result<Option<String>, String> {
-  let python = configured_path("TOTAL_RECALL_IMPORT_PYTHON")?;
-  let worker = configured_path("TOTAL_RECALL_IMPORT_WORKER")?;
+pub async fn total_recall_prepare_webtoon(app: tauri::AppHandle, root: State<'_, AppDataRoot>) -> Result<Option<String>, String> {
+  let python = configured(&root, "TOTAL_RECALL_IMPORT_PYTHON")?;
+  let worker = configured(&root, "TOTAL_RECALL_IMPORT_WORKER")?;
   tauri::async_runtime::spawn_blocking(move || {
     let Some(source) = app.dialog().file().add_filter("Webtoon project", &["json", "wap", "wacx"]).blocking_pick_file() else { return Ok(None); };
     let source = source.into_path().map_err(|error| error.to_string())?;

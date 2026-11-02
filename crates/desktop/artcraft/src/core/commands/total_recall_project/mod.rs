@@ -13,6 +13,7 @@ pub mod media;
 pub mod restore;
 pub mod render_video;
 pub mod scene_sequence;
+pub mod worker_settings;
 pub mod save;
 
 use crate::core::state::data_dir::app_data_root::AppDataRoot;

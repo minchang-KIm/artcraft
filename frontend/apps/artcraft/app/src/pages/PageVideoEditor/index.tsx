@@ -25,6 +25,7 @@ import { createLocalRenderSnapshot } from "./adapters/local-render-snapshot";
 import { MockVoiceProvider } from "./adapters/mock-voice-provider";
 import { importWebtoon } from "./adapters/import-webtoon";
 import { createTotalRecallProjectStorage } from "./adapters/total-recall-project-storage";
+import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
 
 // Tauri host for the @storyteller/ui-video-editor lib.
 //
@@ -381,6 +382,7 @@ export function PageVideoEditor() {
 
   return (
     <div className="h-full w-full overflow-hidden">
+      <div className="absolute left-4 top-52 z-20 rounded bg-ui-controls p-2 text-sm text-white"><LocalWorkerSettings /></div>
       <button type="button" className="absolute left-4 top-20 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void importOriginalProject()}>Import webtoon project</button>
       <label className="absolute right-4 top-20 z-20 cursor-pointer rounded bg-ui-controls px-2 py-1 text-sm text-white">Import prepared webtoon<input aria-label="Import prepared webtoon" type="file" accept=".json,application/json" className="sr-only" disabled={importing} onChange={(event) => { void importProject(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <button type="button" className="absolute right-4 top-36 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void saveRenderSnapshot()}>Save local render snapshot</button>

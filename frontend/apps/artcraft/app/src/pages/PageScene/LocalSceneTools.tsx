@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import type { SceneAudioClip, SequenceAudioClip } from "../../../../../../../../../contracts/scene-audio";
 import { wavDuration } from "./wav-duration";
 import { SceneAudioPreview } from "./scene-audio-preview";
+import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
 import { useTabStore } from "~/pages/Stores/TabState";
 import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
@@ -362,6 +363,7 @@ export function LocalSceneTools() {
   });
   return (
     <div className="absolute right-4 top-28 z-20 flex flex-col items-end gap-2 rounded bg-ui-controls p-2 text-sm text-white">
+      <LocalWorkerSettings />
       <label className="cursor-pointer rounded px-2 py-1">Add local GLB<input aria-label="Add local GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void add(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label className="cursor-pointer rounded px-2 py-1">Add local motion GLB<input aria-label="Add local motion GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void addMotion(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label>MHR coefficient <select aria-label="MHR coefficient" className="text-black" value={identityIndex} disabled={busy} onChange={(event) => setIdentityIndex(Number(event.target.value))}>{Array.from({ length: IDENTITY_COUNT }, (_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>

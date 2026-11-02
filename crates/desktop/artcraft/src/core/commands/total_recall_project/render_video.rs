@@ -2,7 +2,9 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::sync::{Arc, Mutex, OnceLock};
 use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::path::PathBuf;
+use crate::core::state::data_dir::app_data_root::AppDataRoot;
+use super::worker_settings::configured;
+use tauri::State;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 use tauri_plugin_dialog::DialogExt;
@@ -55,14 +57,9 @@ impl Drop for ActiveJob {
   }
 }
 
-fn configured(key: &str) -> Result<PathBuf, String> {
-  std::env::var_os(key).filter(|v| !v.is_empty()).map(PathBuf::from)
-    .ok_or_else(|| format!("Local render is not configured: {key} is missing"))
-}
-
 /// Execute the configured local renderer only; paths never originate in IPC.
 #[tauri::command]
-pub async fn total_recall_render_video(content: String, job_id: Option<String>) -> Result<Vec<u8>, String> {
+pub async fn total_recall_render_video(root: State<'_, AppDataRoot>, content: String, job_id: Option<String>) -> Result<Vec<u8>, String> {
   if content.len() > 150 * 1024 * 1024 { return Err("Render snapshot exceeds 150 MiB".into()); }
   let snapshot: serde_json::Value = serde_json::from_str(&content).map_err(|e| e.to_string())?;
   if snapshot.get("format").and_then(|v| v.as_str()) != Some("total-recall-webtoon-import") || snapshot.get("version").and_then(|v| v.as_u64()) != Some(1) {
@@ -80,9 +77,9 @@ pub async fn total_recall_render_video(content: String, job_id: Option<String>) 
     }
   }
   if duration <= 0.0 { return Err("The render timeline is empty".into()); }
-  let python = configured("TOTAL_RECALL_RENDER_PYTHON")?;
-  let worker = configured("TOTAL_RECALL_RENDER_WORKER")?;
-  let ffmpeg = configured("TOTAL_RECALL_RENDER_FFMPEG")?;
+  let python = configured(&root, "TOTAL_RECALL_RENDER_PYTHON")?;
+  let worker = configured(&root, "TOTAL_RECALL_RENDER_WORKER")?;
+  let ffmpeg = configured(&root, "TOTAL_RECALL_RENDER_FFMPEG")?;
   let job = if let Some(id) = job_id.as_ref() {
     let entries = jobs().lock().map_err(|_| "Render job registry unavailable")?;
     let job = entries.get(id).cloned().ok_or_else(|| "Render job does not exist".to_string())?;
