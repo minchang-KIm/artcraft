@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Object3D, Quaternion, Vector3 } from "three";
-import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, type PoseLandmark } from "@storyteller/ui-pagescene";
+import { invoke } from "@tauri-apps/api/core";
+import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark } from "@storyteller/ui-pagescene";
+import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -18,7 +20,7 @@ const SEGMENTS = [
 
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
 type Preview = { editor: Editor; character: Object3D; bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
-type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; cancelInit?: () => void };
+type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
 const absolute = (url: string) => new URL(url, window.location.href).href;
 
 function parentRotation(parent: Object3D): Quaternion {
@@ -56,6 +58,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   const [segment, setSegment] = useState(0);
   const [mirror, setMirror] = useState(false);
   const [calibrated, setCalibrated] = useState(false);
+  const [recording, setRecording] = useState(false);
+  const [saving, setSaving] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
   const session = useRef<Session | null>(null);
   const generation = useRef(0);
@@ -74,7 +78,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       current.stream?.getTracks().forEach(track => track.stop());
     }
     if (video.current) video.current.srcObject = null;
-    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); }
+    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); setRecording(false); }
   };
 
   useEffect(() => {
@@ -110,7 +114,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   }, [editorInitialized]);
 
   const start = async () => {
-    if (!model || starting || running) return;
+    if (!model || starting || running || saving) return;
     const token = ++generation.current;
     setStarting(true);
     setStatus("Checking local model…");
@@ -122,7 +126,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       if (!MODEL_HASHES.has(digest)) throw new Error("The model does not match a supported pinned MediaPipe pose model.");
       if (generation.current !== token) return;
       const worker = new Worker(absolute(import.meta.env.DEV ? "/__total_recall_pose_worker.js" : workerUrl));
-      current = { worker, stream: null, stopped: false, frameId: 0, nextId: 1, busy: false, points: null, preview: null };
+      current = { worker, stream: null, stopped: false, frameId: 0, nextId: 1, busy: false, points: null, preview: null, recorder: null };
       session.current = current;
       const active = current;
       await new Promise<void>((resolve, reject) => {
@@ -157,6 +161,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
           if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
           const [, a, b] = SEGMENTS[preview.segment];
           preview.bone.quaternion.copy(preview.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(preview.parent)));
+          if (active.recorder?.sample(performance.now(), preview.bone.quaternion)) void finishRecording();
         } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); stop(); }
       };
       worker.onerror = event => { if (!active.stopped) { setStatus(event.message || "Pose worker failed."); stop(); } };
@@ -186,6 +191,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       const editor = getActiveEditor();
       const selected = editor?.sceneManager?.selected_objects;
       if (!current || !editor || selected?.length !== 1 || !selected[0].userData.isCharacter || editor.timelineController.getIsPlaying()) throw new Error("Select one character and pause the timeline.");
+      if (current.recorder) throw new Error("Finish or cancel the recording before recalibrating.");
       const character = selected[0];
       const bone = character.getObjectByProperty("uuid", boneId);
       const camera = editor.cameraController.camera;
@@ -229,6 +235,52 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     setStatus("Pose applied. Save the local scene to retain it.");
   };
 
+  const beginRecording = () => {
+    const current = session.current;
+    if (!current?.preview || current.recorder) return;
+    const timeline = current.preview.editor.timelineController.getTimeline();
+    if (!timeline || !Number.isFinite(timeline.duration) || timeline.duration < 0.1) { setStatus("A timeline of at least 0.1 seconds is required."); return; }
+    const limit = Math.min(30, timeline.duration);
+    current.recorder = new WebcamMotionRecorder(performance.now(), current.preview.bone.quaternion, limit);
+    setRecording(true);
+    setStatus(`Recording selected bone locally, up to ${limit} seconds.`);
+  };
+
+  const finishRecording = async () => {
+    const current = session.current;
+    const preview = current?.preview;
+    const recorder = current?.recorder;
+    if (!preview || !recorder) return;
+    const { editor, character, bone } = preview;
+    const playhead = editor.timelineController.getPlayhead();
+    stop();
+    const token = generation.current;
+    setSaving(true);
+    setStatus("Saving recorded motion…");
+    const checkTarget = () => {
+      const selected = editor.sceneManager?.selected_objects;
+      if (generation.current !== token || getActiveEditor() !== editor || selected?.length !== 1 || selected[0] !== character || editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) !== character || editor.timelineController.getIsPlaying()) throw new Error("Scene selection changed; recorded motion was not added.");
+    };
+    try {
+      const { data, duration } = await encodeWebcamMotion(character, bone, recorder);
+      checkTarget();
+      const timeline = editor.timelineController.getTimeline();
+      if (!timeline || duration > timeline.duration) throw new Error("The recording is longer than the timeline.");
+      const id = await invoke<string>("total_recall_asset_put", { content: Array.from(new Uint8Array(data)) });
+      const clip = (await editor.activeScene.loadRawGlb(id))?.animations?.[0];
+      checkTarget();
+      if (!clip || !validateBoneAnimation(clip, character)) throw new Error("The recorded motion does not bind to the selected skeleton.");
+      const lane = editor.timelineController.recordEdit("Add webcam motion", () => editor.timelineController.addClipLane(character.uuid, {
+        sourceMediaId: id, name: "Webcam motion", startTime: playhead, duration, loop: false, autoDuration: false,
+      }));
+      if (!lane) throw new Error("There is no room for this motion on the character timeline.");
+      usePageSceneStore.getState().setTimelineRevealObjectUuid(character.uuid);
+      usePageSceneStore.getState().setTimelineExpanded(true);
+      setStatus("Webcam motion added to the timeline. Save the local scene to retain it.");
+    } catch (error) { if (mounted.current) setStatus(error instanceof Error ? error.message : String(error)); }
+    finally { if (mounted.current) setSaving(false); }
+  };
+
   return <details className="max-w-72">
     <summary>Local webcam pose (experimental)</summary>
     <p>Camera frames stay on this device. Only one chosen bone is previewed.</p>
@@ -237,9 +289,10 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>
     <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
     <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />
-    {!running && !starting ? <button type="button" disabled={!model || !boneId} onClick={() => void start()}>Start local camera</button> : <button type="button" onClick={() => { stop(); setStatus("Camera stopped; preview cancelled."); }}>Stop camera</button>}
-    <button type="button" disabled={!running || !boneId} onClick={calibrate}>Calibrate selected bone</button>
-    <button type="button" disabled={!calibrated} onClick={apply}>Apply webcam pose</button>
+    {!running && !starting ? <button type="button" disabled={!model || !boneId || saving} onClick={() => void start()}>Start local camera</button> : <button type="button" onClick={() => { stop(); setStatus("Camera stopped; preview cancelled."); }}>Stop camera</button>}
+    <button type="button" disabled={!running || !boneId || recording} onClick={calibrate}>Calibrate selected bone</button>
+    <button type="button" disabled={!calibrated || recording} onClick={apply}>Apply webcam pose</button>
+    {!recording ? <button type="button" disabled={!calibrated || saving} onClick={beginRecording}>Record webcam motion</button> : <button type="button" onClick={() => void finishRecording()}>Finish webcam recording</button>}
     {status && <p role="status">{status}</p>}
   </details>;
 }
