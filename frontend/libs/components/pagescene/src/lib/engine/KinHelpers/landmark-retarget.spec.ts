@@ -61,4 +61,27 @@ describe("single bone landmark retarget", () => {
     expect(retarget.getTrackingState()).toBe("tracking");
     expect(() => missing(1700)).toThrow(/settings/);
   });
+
+  it("tracks axial rotation from a secondary axis without changing the parent frame", () => {
+    const origin = point(0, 0), top = point(0, -1);
+    const baseline: [ReturnType<typeof point>, ReturnType<typeof point>] = [point(-1, -1), point(1, -1)];
+    const parent = new Quaternion().setFromAxisAngle(new Vector3(0, 0, 1), 0.3);
+    const local = new Quaternion().setFromAxisAngle(new Vector3(1, 0, 0), 0.2);
+    const tracker = new LandmarkBoneRetarget(origin, top, identity(), parent, local, false, 0.5, baseline);
+    // The primary direction stays vertical while the shoulder axis turns +90° about Y.
+    const turned: [ReturnType<typeof point>, ReturnType<typeof point>] = [point(0, -1, -1), point(0, -1, 1)];
+    const result = tracker.update(origin, top, parent, 1, Math.PI, undefined, turned);
+    const expected = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), Math.PI / 2).multiply(parent).multiply(local);
+    expect(parent.clone().multiply(result).angleTo(expected)).toBeLessThan(1e-6);
+    const held = tracker.update(origin, top, parent, 1, Math.PI, { timestampMs: 100, mode: "hold" }, [origin, top]);
+    expect(held.angleTo(result)).toBeLessThan(1e-6);
+    expect(tracker.getTrackingState()).toBe("holding");
+    expect(() => new LandmarkBoneRetarget(origin, top, identity(), parent, local, false, 0.5, [origin, top])).toThrow(/independent/);
+    const mirrored = new LandmarkBoneRetarget(origin, top, identity(), identity(), identity(), true, 0.5, baseline);
+    const limited = mirrored.update(origin, top, identity(), 1, Math.PI / 4, undefined, turned);
+    const expectedMirror = new Quaternion().setFromAxisAngle(new Vector3(0, 1, 0), -Math.PI / 4);
+    expect(limited.angleTo(expectedMirror)).toBeLessThan(1e-6);
+    const uncertain = mirrored.update(origin, top, identity(), 1, Math.PI, { timestampMs: 200, mode: "hold" }, [point(0, -1, -1, 0.1), turned[1]]);
+    expect(uncertain.angleTo(limited)).toBeLessThan(1e-6);
+  });
 });

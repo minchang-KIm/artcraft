@@ -4,7 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark, type TrackingState } from "@storyteller/ui-pagescene";
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
-import { WEBCAM_SEGMENTS as SEGMENTS, webcamSegmentPoints } from "./webcam-landmarks";
+import { WEBCAM_SEGMENTS as SEGMENTS, webcamSecondaryAxis, webcamSegmentPoints } from "./webcam-landmarks";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -164,7 +164,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
           if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.bindings.some(binding => preview.character.getObjectByProperty("uuid", binding.bone.uuid) !== binding.bone || binding.bone.parent !== binding.parent) || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
           for (const binding of preview.bindings) {
             const [a, b] = webcamSegmentPoints(active.points, binding.segment);
-            binding.bone.quaternion.copy(binding.retarget.update(a as PoseLandmark, b as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
+            binding.bone.quaternion.copy(binding.retarget.update(a as PoseLandmark, b as PoseLandmark, parentRotation(binding.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }, webcamSecondaryAxis(active.points, binding.segment)));
           }
           const states = preview.bindings.map(binding => binding.retarget.getTrackingState());
           setTracking(states.includes("fading") ? "fading" : states.includes("holding") ? "holding" : states.includes("lost") ? "lost" : "tracking");
@@ -214,7 +214,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
         if (!bone || bone.type !== "Bone" || !bone.parent || !SEGMENTS[item.segment]) throw new Error("Select a valid bone and limb.");
         const before = bone.quaternion.clone();
         const [a, b] = webcamSegmentPoints(current.points, item.segment);
-        return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(a as PoseLandmark, b as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror) };
+        return { bone, parent: bone.parent, before, segment: item.segment, retarget: new LandmarkBoneRetarget(a as PoseLandmark, b as PoseLandmark, cameraRotation, parentRotation(bone.parent), before, mirror, 0.5, webcamSecondaryAxis(current.points, item.segment)) };
       });
       bindings.sort((a, b) => bonePath(character, a.bone).length - bonePath(character, b.bone).length);
       current.preview = { editor, character, bindings, lossMode };

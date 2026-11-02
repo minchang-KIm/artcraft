@@ -1,4 +1,4 @@
-import type { PoseLandmark } from "@storyteller/ui-pagescene";
+import type { LandmarkAxis, PoseLandmark } from "@storyteller/ui-pagescene";
 
 export const WEBCAM_SEGMENTS = [
   ["Left upper arm", 11, 13], ["Left forearm", 13, 15], ["Right upper arm", 12, 14], ["Right forearm", 14, 16],
@@ -21,4 +21,9 @@ export function webcamSegmentPoints(points: PoseLandmark[] | null, segment: numb
   if (!definition) throw new Error("Invalid webcam segment.");
   if (segment === 8) return [midpoint(points?.[23], points?.[24]), midpoint(points?.[11], points?.[12])];
   return [points?.[definition[1]], points?.[definition[2]]];
+}
+
+/** The shoulder axis supplies torso orientation around the spine direction. */
+export function webcamSecondaryAxis(points: PoseLandmark[] | null, segment: number): LandmarkAxis | undefined {
+  return segment === 8 ? [points?.[11], points?.[12]] : undefined;
 }

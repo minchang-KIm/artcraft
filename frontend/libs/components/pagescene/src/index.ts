@@ -105,7 +105,7 @@ export type {
 // flows through that single surface.
 export { default as Editor } from "./lib/engine/editor";
 export { LandmarkBoneRetarget } from "./lib/engine/KinHelpers/landmark-retarget";
-export type { PoseLandmark, TrackingLossOptions, TrackingState } from "./lib/engine/KinHelpers/landmark-retarget";
+export type { LandmarkAxis, PoseLandmark, TrackingLossOptions, TrackingState } from "./lib/engine/KinHelpers/landmark-retarget";
 export type { EditorInitializeConfig } from "./lib/engine/editor";
 export { default as Scene } from "./lib/engine/scene";
 export type { SceneDeps } from "./lib/engine/scene";

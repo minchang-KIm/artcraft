@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { webcamSegmentPoints } from "./webcam-landmarks";
+import { webcamSecondaryAxis, webcamSegmentPoints } from "./webcam-landmarks";
 
 describe("webcam body segments", () => {
   it("uses hip and shoulder midpoints and the weakest endpoint confidence", () => {
@@ -10,6 +10,9 @@ describe("webcam body segments", () => {
     points[12] = { x: 3, y: 0, z: 1, visibility: 0.6, presence: 0.9 };
     expect(webcamSegmentPoints(points, 8)).toEqual([{ x: 0, y: 2, z: 1, visibility: 0.7, presence: 0.8 }, { x: 1, y: 0, z: 0, visibility: 0.6, presence: 0.7 }]);
     expect(webcamSegmentPoints(points, 0)).toEqual([points[11], points[13]]);
+    expect(webcamSecondaryAxis(points, 8)).toEqual([points[11], points[12]]);
+    expect(webcamSecondaryAxis(null, 8)).toEqual([undefined, undefined]);
+    expect(webcamSecondaryAxis(points, 0)).toBeUndefined();
     expect(webcamSegmentPoints(null, 8)).toEqual([undefined, undefined]);
     expect(() => webcamSegmentPoints(points, 9)).toThrow();
   });
