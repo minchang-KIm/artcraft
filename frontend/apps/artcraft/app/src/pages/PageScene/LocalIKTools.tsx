@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Object3D, Quaternion, Vector3 } from "three";
-import { getActiveEditor, IKTargetHandle, PoseModeChangedEvent, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, solveTwoBoneIK } from "@storyteller/ui-pagescene";
+import { getActiveEditor, IKTargetHandle, PoseModeChangedEvent, SceneResetEvent, SelectionChangedEvent, TimelineChangedEvent, TimelinePlayheadEvent, solveTwoBoneIK } from "@storyteller/ui-pagescene";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
 import { acquirePosePreview, hasPosePreview } from "./pose-control-lease";
 
@@ -60,6 +60,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
   const [limit, setLimit] = useState("180");
   const [status, setStatus] = useState("");
   const [handling, setHandling] = useState(false);
+  const [keys, setKeys] = useState<Array<{ id: string; time: number; bone: string }>>([]);
   const handleSession = useRef<HandleSession | null>(null);
 
   const stopHandle = (commit: boolean, updateUi = true) => {
@@ -92,11 +93,17 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
   useEffect(() => {
     const editor = getActiveEditor();
     if (!editorInitialized || !editor) return;
+    const refreshKeys = () => {
+      const character = selectedCharacter();
+      const tracks = editor.timelineController.getTimeline()?.boneTracks ?? [];
+      setKeys(tracks.filter(track => track.objectUuid === character?.uuid).flatMap(track => track.keyframes.map(key => ({ id: key.id, time: key.time, bone: track.path.at(-1)?.name || "Unnamed bone" }))).sort((a, b) => a.time - b.time || a.bone.localeCompare(b.bone)));
+    };
     const refresh = () => {
       stopHandle(false);
       const list: Array<{ id: string; name: string }> = [];
       selectedCharacter()?.traverse((bone: Object3D) => { if (bone.type === "Bone") list.push({ id: bone.uuid, name: bone.name || "Unnamed bone" }); });
       setBones(list); setUpperId(""); setMiddleId(""); setEndId(""); setStatus("");
+      refreshKeys();
     };
     refresh();
     const selection = editor.bus.subscribe(SelectionChangedEvent, refresh);
@@ -105,7 +112,8 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
       if (handleSession.current) { stopHandle(false); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
     });
     const poseMode = editor.bus.subscribe(PoseModeChangedEvent, () => stopHandle(false));
-    return () => { selection(); reset(); timeline(); poseMode(); stopHandle(false, false); };
+    const changed = editor.bus.subscribe(TimelineChangedEvent, refreshKeys);
+    return () => { selection(); reset(); timeline(); poseMode(); changed(); stopHandle(false, false); };
   }, [editorInitialized]);
 
   const suggest = () => {
@@ -188,6 +196,27 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     } catch (error) { restoreGizmo?.(); release?.(); setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
+  const keyPose = () => {
+    const editor = getActiveEditor(), character = selectedCharacter();
+    try {
+      if (!editor || !character || hasPosePreview(editor)) throw new Error("Select a character and finish the active pose preview first.");
+      const upper = character.getObjectByProperty("uuid", upperId), middle = character.getObjectByProperty("uuid", middleId);
+      if (!upper || !middle || upper.type !== "Bone" || middle.type !== "Bone") throw new Error("Select upper and middle bones.");
+      editor.timelineController.create();
+      editor.timelineController.recordEdit("Key IK pose", () => editor.timelineController.addBoneRotationKeys(character.uuid, [pathTo(character, upper), pathTo(character, middle)]));
+      setStatus(`IK pose keyed at ${editor.timelineController.getPlayhead().toFixed(2)} seconds. Save the local scene to retain it.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const removeKey = (id: string) => {
+    const editor = getActiveEditor();
+    try {
+      if (!editor || hasPosePreview(editor) || editor.timelineController.getIsPlaying()) throw new Error("Pause playback and finish the active pose preview first.");
+      editor.timelineController.recordEdit("Delete bone key", () => editor.timelineController.deleteBoneRotationKey(id));
+      setStatus("Bone key deleted. Save the local scene to retain this change.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
   const options = <><option value="">Select a bone</option>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</>;
   return <details className="max-w-72">
     <summary>Local two-bone IK (experimental)</summary>
@@ -202,6 +231,8 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     <label>Joint limit (degrees) <input aria-label="IK joint limit" type="number" min="0" max="180" step="1" className="w-16 text-black" value={limit} disabled={handling} onChange={event => setLimit(event.currentTarget.value)} /></label>
     <button type="button" disabled={!upperId || !middleId || !endId || handling} onClick={apply}>Apply IK target</button>
     {!handling ? <button type="button" disabled={!upperId || !middleId || !endId} onClick={startHandle}>Start IK handle</button> : <><button type="button" onClick={() => stopHandle(true)}>Apply IK handle</button><button type="button" onClick={() => stopHandle(false)}>Cancel IK handle</button></>}
+    <button type="button" disabled={!upperId || !middleId || handling} onClick={keyPose}>Key IK pose at playhead</button>
+    {keys.length > 0 && <ul aria-label="Bone rotation keys">{keys.map(key => <li key={key.id}><button type="button" disabled={handling} onClick={() => { const editor = getActiveEditor(); if (editor && !hasPosePreview(editor)) { editor.timelineController.pause(); editor.timelineController.seekTo(key.time); } }}>{key.bone} · {key.time.toFixed(2)}s</button> <button type="button" disabled={handling} aria-label={`Delete ${key.bone} key at ${key.time.toFixed(2)} seconds`} onClick={() => removeKey(key.id)}>Delete</button></li>)}</ul>}
     {status && <p role="status">{status}</p>}
   </details>;
 }

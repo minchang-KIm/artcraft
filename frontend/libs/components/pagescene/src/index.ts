@@ -264,6 +264,7 @@ export {
   SceneLoadedEvent,
   SceneResetEvent,
   TimelinePlayheadEvent,
+  TimelineChangedEvent,
   SelectionChangedEvent,
   InspectorPanelChangedEvent,
   ObjectAddedEvent,
