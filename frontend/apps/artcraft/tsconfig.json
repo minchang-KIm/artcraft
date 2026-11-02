@@ -5,7 +5,8 @@
     "app/**/*.js",
     "app/**/*.ts",
     "app/**/*.tsx",
-    "../../../../../contracts/scene-audio.ts"
+    "../../../../../contracts/scene-audio.ts",
+    "../../../../../contracts/recovery-reference.ts"
   ],
   "compilerOptions": {
     "lib": [

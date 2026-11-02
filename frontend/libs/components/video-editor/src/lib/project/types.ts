@@ -1,4 +1,5 @@
 import type { LegacyWebtoonSource } from "../../../../../../../../../contracts/legacy-webtoon-source";
+import type { RecoveryReference } from "../../../../../../../../../contracts/recovery-reference";
 import type { FrameRate } from "opencut-wasm";
 import type { TScene } from "../timeline/types";
 import type { MediaTime } from "../wasm";
@@ -50,6 +51,7 @@ export interface TProject {
   version: number;
   timelineViewState?: TTimelineViewState;
   legacyWebtoonSource?: LegacyWebtoonSource;
+  recoveredFrom?: RecoveryReference;
 }
 
 export type TProjectSortKey = "createdAt" | "updatedAt" | "name" | "duration";

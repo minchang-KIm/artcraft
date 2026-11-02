@@ -1,17 +1,34 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { SceneAudioClip, SequenceAudioClip } from "../../../../../../../../../contracts/scene-audio";
+import type { RecoveryReference } from "../../../../../../../../../contracts/recovery-reference";
 import { wavDuration } from "./wav-duration";
 import { SceneAudioPreview } from "./scene-audio-preview";
 import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
+import { LocalRecovery } from "~/pages/LocalRecovery";
 import { useTabStore } from "~/pages/Stores/TabState";
 import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
-type SceneDocument = { id: string; revision: number; kind: "scene"; name: string; updatedAt: number; data: unknown; generatedAssets?: Record<string, unknown>; mhrIdentityDraft?: number[]; sceneAudio?: SceneAudioClip[] };
+type SceneDocument = { id: string; revision: number; kind: "scene"; name: string; updatedAt: number; data: unknown; generatedAssets?: Record<string, unknown>; mhrIdentityDraft?: number[]; sceneAudio?: SceneAudioClip[]; recoveredFrom?: RecoveryReference };
 const MAX_BYTES = 50 * 1024 * 1024;
 const IDENTITY_COUNT = 45;
 const neutralIdentity = () => Array<string>(IDENTITY_COUNT).fill("0");
 const validIdentity = (value: unknown): value is number[] => Array.isArray(value) && value.length === IDENTITY_COUNT && value.every((v) => typeof v === "number" && Number.isFinite(v) && v >= -3 && v <= 3);
+
+async function validateSceneAssets(scene: SceneDocument): Promise<SceneAudioClip[]> {
+  const snapshot = scene.data as { scene?: Array<{ media_file_token?: string }>; timeline?: { clipLanes?: Array<{ strip?: { sourceMediaId?: string } }> } };
+  if (!Array.isArray(snapshot?.scene)) throw new Error("The local scene data is invalid.");
+  const localAssets = new Set(snapshot.scene.map(object => object.media_file_token).filter((token): token is string => typeof token === "string" && token.startsWith("local-glb:")));
+  for (const lane of snapshot.timeline?.clipLanes ?? []) {
+    const id = lane.strip?.sourceMediaId;
+    if (typeof id === "string" && id.startsWith("local-glb:")) localAssets.add(id);
+  }
+  const audio = scene.sceneAudio ?? [];
+  if (!Array.isArray(audio) || audio.length > 1000 || audio.some(clip => !clip || typeof clip.id !== "string" || typeof clip.name !== "string" || !/^local-media:audio~wav:[0-9a-f]{64}$/.test(clip.mediaId) || !Number.isFinite(clip.start) || clip.start < 0 || !Number.isFinite(clip.duration) || clip.duration <= 0 || clip.start + clip.duration > 86400)) throw new Error("Invalid saved scene audio.");
+  await Promise.all([...localAssets].map(id => invoke<number[]>("total_recall_asset_get", { id })));
+  await Promise.all(audio.map(async clip => { const [mime, content] = await invoke<[string, number[]]>("total_recall_media_get", { id: clip.mediaId }); if (mime !== "audio/wav" || Math.abs(wavDuration(Uint8Array.from(content)) - clip.duration) > 1e-6) throw new Error("Saved scene audio is invalid."); }));
+  return audio;
+}
 
 /** Local asset and scene commands; no user media leaves the device. */
 export function LocalSceneTools() {
@@ -38,6 +55,7 @@ export function LocalSceneTools() {
   const editorInitialized = usePageSceneStore(state => state.is3DEditorInitialized);
   const current = useRef<{ id: string; revision: number } | undefined>(undefined);
   const generatedAssets = useRef<Record<string, unknown>>({});
+  const recoveredFrom = useRef<RecoveryReference | undefined>(undefined);
   const run = async (work: () => Promise<string>) => {
     if (busyRef.current) return;
     busyRef.current = true;
@@ -54,6 +72,7 @@ export function LocalSceneTools() {
       audioPreview.current?.setClips([]);
       current.current = undefined;
       generatedAssets.current = {};
+      recoveredFrom.current = undefined;
       setSceneAudio([]);
       setIdentityDraft(neutralIdentity());
       setIdentityIndex(0);
@@ -310,7 +329,7 @@ export function LocalSceneTools() {
     const name = sceneName.trim();
     if (!name) throw new Error("Enter a scene name.");
     if (!identityIsValid) throw new Error("Every MHR identity coefficient must be between -3 and 3.");
-    const document = { id, kind: "scene", name, updatedAt: Date.now(), data, generatedAssets: generatedAssets.current, mhrIdentityDraft: identity, sceneAudio };
+    const document = { id, kind: "scene", name, updatedAt: Date.now(), data, generatedAssets: generatedAssets.current, mhrIdentityDraft: identity, sceneAudio, ...(recoveredFrom.current ? { recoveredFrom: recoveredFrom.current } : {}) };
     const saved = active
       ? await invoke<SceneDocument>("total_recall_project_save", { id, expectedRevision: active.revision, document })
       : await invoke<SceneDocument>("total_recall_project_create", { id, document });
@@ -333,22 +352,13 @@ export function LocalSceneTools() {
     const saved = all.filter((project) => project.kind === "scene").sort((a, b) => b.updatedAt - a.updatedAt);
     const latest = selectedId ? saved.find((scene) => scene.id === selectedId) : saved[0];
     if (!latest) return selectedId ? "The selected scene no longer exists." : "No saved local scene.";
-    const snapshot = latest.data as { scene?: Array<{ media_file_token?: string }>; timeline?: { clipLanes?: Array<{ strip?: { sourceMediaId?: string } }> } };
-    if (!Array.isArray(snapshot?.scene)) throw new Error("The local scene data is invalid.");
-    const localAssets = new Set(snapshot.scene.map((object) => object.media_file_token).filter((token): token is string => typeof token === "string" && token.startsWith("local-glb:")));
-    for (const lane of snapshot.timeline?.clipLanes ?? []) {
-      const id = lane.strip?.sourceMediaId;
-      if (typeof id === "string" && id.startsWith("local-glb:")) localAssets.add(id);
-    }
     // Validate every local dependency before loadCache clears the current scene.
-    const savedAudio = latest.sceneAudio ?? [];
-    if (!Array.isArray(savedAudio) || savedAudio.length > 1000 || savedAudio.some(clip => !clip || typeof clip.id !== "string" || typeof clip.name !== "string" || !/^local-media:audio~wav:[0-9a-f]{64}$/.test(clip.mediaId) || !Number.isFinite(clip.start) || clip.start < 0 || !Number.isFinite(clip.duration) || clip.duration <= 0 || clip.start + clip.duration > 86400)) throw new Error("Invalid saved scene audio.");
-    await Promise.all([...localAssets].map((id) => invoke<number[]>("total_recall_asset_get", { id })));
-    await Promise.all(savedAudio.map(async clip => { const [mime, content] = await invoke<[string, number[]]>("total_recall_media_get", { id: clip.mediaId }); if (mime !== "audio/wav" || Math.abs(wavDuration(Uint8Array.from(content)) - clip.duration) > 1e-6) throw new Error("Saved scene audio is invalid."); }));
+    const savedAudio = await validateSceneAssets(latest);
     const loaded = await editor.applyJson(JSON.stringify(latest.data));
     if (!loaded.applied) throw new Error("The local scene could not be loaded.");
     current.current = { id: latest.id, revision: latest.revision };
     generatedAssets.current = latest.generatedAssets ?? {};
+    recoveredFrom.current = latest.recoveredFrom;
     setSceneAudio(savedAudio);
     const provenance = Object.values(generatedAssets.current);
     const legacyIdentity = provenance.length === 1 && provenance[0] && typeof provenance[0] === "object"
@@ -362,8 +372,16 @@ export function LocalSceneTools() {
     return "Local scene opened.";
   });
   return (
-    <div className="absolute right-4 top-28 z-20 flex flex-col items-end gap-2 rounded bg-ui-controls p-2 text-sm text-white">
+    <div className="absolute right-4 top-28 z-20 flex max-h-[calc(100vh-7rem)] flex-col items-end gap-2 overflow-y-auto rounded bg-ui-controls p-2 text-sm text-white">
       <LocalWorkerSettings />
+      <LocalRecovery kind="scene" copy={async (value, revision) => {
+        const source = value as SceneDocument;
+        if (!source || source.kind !== "scene" || typeof source.id !== "string" || typeof source.name !== "string") throw new Error("Invalid scene history.");
+        await validateSceneAssets(source);
+        const id = `scene:${crypto.randomUUID()}`;
+        const name = `${source.name.slice(0, 160)} (recovered r${revision})`;
+        await invoke("total_recall_project_create", { id, document: { ...source, id, name, updatedAt: Date.now(), recoveredFrom: { schemaVersion: 1, projectId: source.id, revision } } });
+      }} />
       <label className="cursor-pointer rounded px-2 py-1">Add local GLB<input aria-label="Add local GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void add(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label className="cursor-pointer rounded px-2 py-1">Add local motion GLB<input aria-label="Add local motion GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void addMotion(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label>MHR coefficient <select aria-label="MHR coefficient" className="text-black" value={identityIndex} disabled={busy} onChange={(event) => setIdentityIndex(Number(event.target.value))}>{Array.from({ length: IDENTITY_COUNT }, (_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>

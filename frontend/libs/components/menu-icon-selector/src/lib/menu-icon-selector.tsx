@@ -141,6 +141,7 @@ export const MenuIconSelector: React.FC<MenuIconSelectorProps> = ({
               description={description || undefined}
             >
               <button
+                aria-label={item.label}
                 ref={(el) => {
                   itemsRef.current[idx] = el;
                 }}

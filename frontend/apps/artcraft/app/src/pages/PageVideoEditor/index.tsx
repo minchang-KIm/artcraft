@@ -10,6 +10,8 @@ import {
   mediaTimeFromSeconds,
   mediaTimeToSeconds,
   createDefaultAdapters,
+  deserializeProjectDocument,
+  serializeProjectDocument,
   ZERO_MEDIA_TIME,
   type ElementRef,
   type TProject,
@@ -26,6 +28,7 @@ import { MockVoiceProvider } from "./adapters/mock-voice-provider";
 import { importWebtoon } from "./adapters/import-webtoon";
 import { createTotalRecallProjectStorage } from "./adapters/total-recall-project-storage";
 import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
+import { LocalRecovery, validateLocalReferences } from "~/pages/LocalRecovery";
 
 // Tauri host for the @storyteller/ui-video-editor lib.
 //
@@ -414,7 +417,8 @@ export function PageVideoEditor() {
   return (
     <div className="h-full w-full overflow-hidden">
       <div className="absolute left-4 top-52 z-20 rounded bg-ui-controls p-2 text-sm text-white"><LocalWorkerSettings /></div>
-      <details className="absolute left-4 top-64 z-20 rounded bg-ui-controls p-2 text-sm text-white">
+      <div className="absolute left-4 top-64 z-20 flex max-h-[calc(100vh-17rem)] flex-col items-start gap-2 overflow-y-auto rounded bg-ui-controls p-2 text-sm text-white">
+      <details>
         <summary>Local project backup</summary>
         <div className="flex max-w-80 flex-col gap-1">
           <p>Backs up all local projects, saved history, deleted projects and stored assets. Save 3D scenes first and choose a .trbackup file name.</p>
@@ -425,6 +429,18 @@ export function PageVideoEditor() {
           <button type="button" disabled={importing || !selectedProject} onClick={() => void backup("open")}>Open local video project</button>
         </div>
       </details>
+      <LocalRecovery kind="video" copy={async (value, revision) => {
+        const source = value as { id?: unknown; name?: unknown; data?: unknown };
+        if (!source || typeof source.id !== "string" || typeof source.name !== "string") throw new Error("Invalid video history.");
+        const restored = deserializeProjectDocument(source.data);
+        if (!restored || restored.project.metadata.id !== source.id || !Array.isArray(restored.media)) throw new Error("Invalid video project history.");
+        await validateLocalReferences(source.data);
+        const id = crypto.randomUUID(), now = new Date(), name = `${source.name.slice(0, 160)} (recovered r${revision})`;
+        const recoveredFrom = { schemaVersion: 1 as const, projectId: source.id, revision };
+        const project = { ...restored.project, recoveredFrom, metadata: { ...restored.project.metadata, id, name, createdAt: now, updatedAt: now } };
+        await invoke("total_recall_project_create", { id, document: { id, name, updatedAt: now.getTime(), data: serializeProjectDocument({ project, media: restored.media }), recoveredFrom } });
+      }} />
+      </div>
       <button type="button" className="absolute left-4 top-20 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void importOriginalProject()}>Import webtoon project</button>
       <label className="absolute right-4 top-20 z-20 cursor-pointer rounded bg-ui-controls px-2 py-1 text-sm text-white">Import prepared webtoon<input aria-label="Import prepared webtoon" type="file" accept=".json,application/json" className="sr-only" disabled={importing} onChange={(event) => { void importProject(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <button type="button" className="absolute right-4 top-36 z-20 rounded bg-ui-controls px-2 py-1 text-sm text-white" disabled={importing} onClick={() => void saveRenderSnapshot()}>Save local render snapshot</button>

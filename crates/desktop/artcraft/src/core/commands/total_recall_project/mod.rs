@@ -10,6 +10,7 @@ pub mod list;
 pub mod load;
 pub mod mhr_generate;
 pub mod prepare_webtoon;
+pub mod recovery;
 pub mod media;
 pub mod restore;
 pub mod render_video;
