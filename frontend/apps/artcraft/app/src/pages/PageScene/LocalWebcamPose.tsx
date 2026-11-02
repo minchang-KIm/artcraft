@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Object3D, Quaternion, Vector3 } from "three";
 import { invoke } from "@tauri-apps/api/core";
-import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark } from "@storyteller/ui-pagescene";
+import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChangedEvent, TimelinePlayheadEvent, usePageSceneStore, validateBoneAnimation, type PoseLandmark, type TrackingState } from "@storyteller/ui-pagescene";
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
@@ -19,7 +19,7 @@ const SEGMENTS = [
 ] as const;
 
 type Editor = NonNullable<ReturnType<typeof getActiveEditor>>;
-type Preview = { editor: Editor; character: Object3D; bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number };
+type Preview = { editor: Editor; character: Object3D; bone: Object3D; parent: Object3D; before: Quaternion; retarget: LandmarkBoneRetarget; segment: number; lossMode: "hold" | "fade" };
 type Session = { worker: Worker; stream: MediaStream | null; stopped: boolean; frameId: number; nextId: number; busy: boolean; points: PoseLandmark[] | null; preview: Preview | null; recorder: WebcamMotionRecorder | null; cancelInit?: () => void };
 const absolute = (url: string) => new URL(url, window.location.href).href;
 
@@ -57,6 +57,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
   const [boneId, setBoneId] = useState("");
   const [segment, setSegment] = useState(0);
   const [mirror, setMirror] = useState(false);
+  const [lossMode, setLossMode] = useState<"hold" | "fade">("hold");
+  const [tracking, setTracking] = useState<TrackingState | null>(null);
   const [calibrated, setCalibrated] = useState(false);
   const [recording, setRecording] = useState(false);
   const [saving, setSaving] = useState(false);
@@ -78,7 +80,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       current.stream?.getTracks().forEach(track => track.stop());
     }
     if (video.current) video.current.srcObject = null;
-    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); setRecording(false); }
+    if (mounted.current) { setRunning(false); setStarting(false); setCalibrated(false); setRecording(false); setTracking(null); }
   };
 
   useEffect(() => {
@@ -160,7 +162,8 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
           const selected = preview.editor.sceneManager?.selected_objects;
           if (getActiveEditor() !== preview.editor || selected?.length !== 1 || selected[0] !== preview.character || preview.editor.activeScene.scene.getObjectByProperty("uuid", preview.character.uuid) !== preview.character || preview.character.getObjectByProperty("uuid", preview.bone.uuid) !== preview.bone || preview.bone.parent !== preview.parent || preview.editor.timelineController.getIsPlaying()) throw new Error("Scene selection or playback changed; preview stopped.");
           const [, a, b] = SEGMENTS[preview.segment];
-          preview.bone.quaternion.copy(preview.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(preview.parent)));
+          preview.bone.quaternion.copy(preview.retarget.update(active.points?.[a] as PoseLandmark, active.points?.[b] as PoseLandmark, parentRotation(preview.parent), 0.35, Math.PI / 2, { timestampMs: data.timestampMs, mode: preview.lossMode }));
+          setTracking(preview.retarget.getTrackingState());
           if (active.recorder?.sample(performance.now(), preview.bone.quaternion)) void finishRecording();
         } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); stop(); }
       };
@@ -199,11 +202,13 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       if (current.preview) current.preview.bone.quaternion.copy(current.preview.before);
       current.preview = null;
       setCalibrated(false);
+      setTracking(null);
       const [, a, b] = SEGMENTS[segment];
       const before = bone.quaternion.clone();
       const retarget = new LandmarkBoneRetarget(current.points?.[a] as PoseLandmark, current.points?.[b] as PoseLandmark, camera.getWorldQuaternion(new Quaternion()), parentRotation(bone.parent), before, mirror);
-      current.preview = { editor, character, bone, parent: bone.parent, before, retarget, segment };
+      current.preview = { editor, character, bone, parent: bone.parent, before, retarget, segment, lossMode };
       setCalibrated(true);
+      setTracking("tracking");
       setStatus("Calibrated. Move the selected limb, then apply or cancel.");
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
@@ -288,11 +293,13 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     <label>Bone <select aria-label="Webcam bone" className="max-w-48 text-black" value={boneId} disabled={calibrated} onChange={event => setBoneId(event.target.value)}>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</select></label>
     <label>Limb <select aria-label="Webcam limb" className="text-black" value={segment} disabled={calibrated} onChange={event => setSegment(Number(event.target.value))}>{SEGMENTS.map(([name], index) => <option key={name} value={index}>{name}</option>)}</select></label>
     <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
+    <label>When tracking is lost <select aria-label="When tracking is lost" className="text-black" value={lossMode} disabled={calibrated} onChange={event => setLossMode(event.target.value as "hold" | "fade")}><option value="hold">Hold last pose</option><option value="fade">Return to calibrated pose</option></select></label>
     <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />
     {!running && !starting ? <button type="button" disabled={!model || !boneId || saving} onClick={() => void start()}>Start local camera</button> : <button type="button" onClick={() => { stop(); setStatus("Camera stopped; preview cancelled."); }}>Stop camera</button>}
     <button type="button" disabled={!running || !boneId || recording} onClick={calibrate}>Calibrate selected bone</button>
     <button type="button" disabled={!calibrated || recording} onClick={apply}>Apply webcam pose</button>
     {!recording ? <button type="button" disabled={!calibrated || saving} onClick={beginRecording}>Record webcam motion</button> : <button type="button" onClick={() => void finishRecording()}>Finish webcam recording</button>}
+    {tracking && <p aria-live="polite">{tracking === "tracking" ? "Tracking pose" : tracking === "holding" ? "Tracking lost: holding pose" : tracking === "fading" ? "Tracking lost: returning to calibration" : "Tracking lost: calibrated pose"}</p>}
     {status && <p role="status">{status}</p>}
   </details>;
 }
