@@ -2,6 +2,7 @@ import { AnimationClip, Euler, Object3D, Quaternion, QuaternionKeyframeTrack, Sc
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { sampleTrackAt } from "../engine/timeline/interpolation";
+import { resolveBonePath, sampleBoneRotation } from "../engine/timeline/boneRotation";
 import { cloneTimeline, type TimelineData } from "../engine/timeline/types";
 import type Editor from "../engine/editor";
 import { CharacterAnimationManager } from "../engine/animation/CharacterAnimationManager";
@@ -29,6 +30,15 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
   const copy = clone(character);
   copy.uuid = character.uuid;
   const lanes = timeline?.clipLanes.filter((lane) => lane.objectUuid === character.uuid) ?? [];
+  const boneTracks = timeline?.boneTracks?.filter((track) => track.objectUuid === character.uuid) ?? [];
+  if (lanes.length && boneTracks.length) throw new Error("A character cannot export motion clips and bone keys together.");
+  // Resolve against the clone before the skin meshes are reparented below.
+  const keyedBones = boneTracks.map((track) => {
+    const bone = resolveBonePath(copy, track.path);
+    if (!bone || !sampleBoneRotation(track, 0)) throw new Error("Invalid or unbound bone rotation track.");
+    return { track, bone };
+  });
+  if (new Set(keyedBones.map(({ bone }) => bone)).size !== keyedBones.length) throw new Error("Duplicate bone rotation tracks.");
   if (lanes.length && (!editor || !editor.characterAnimationManager.copyRestPoseTo(character.uuid, copy))) {
     throw new Error("Animation clips are not ready for export.");
   }
@@ -41,7 +51,7 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
   const animations: AnimationClip[] = [];
   if (timeline) {
     const track = timeline.tracks.find((item) => item.objectUuid === character.uuid);
-    if (!track?.keyframes.length && !lanes.length) throw new Error("The selected character has no timeline animation.");
+    if (!track?.keyframes.length && !lanes.length && !keyedBones.length) throw new Error("The selected character has no timeline animation.");
     {
       if (!Number.isFinite(timeline.duration) || timeline.duration <= 0 || timeline.duration > 60 ||
           !Number.isFinite(timeline.fps) || timeline.fps <= 0 || timeline.fps > 120) {
@@ -56,6 +66,12 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
         if (!Number.isFinite(key.time) || key.time < 0 || key.time > timeline.duration || key.time <= previousTime) throw new Error("Invalid timeline keyframe time or order.");
         previousTime = key.time;
         times.add(Math.fround(key.time));
+      }
+      for (const { track: boneTrack } of keyedBones) {
+        for (const key of boneTrack.keyframes) {
+          if (key.time > timeline.duration) throw new Error("Bone keyframe is outside the timeline.");
+          times.add(Math.fround(key.time));
+        }
       }
       let mixer: CharacterAnimationManager | undefined;
       if (lanes.length && editor) {
@@ -91,6 +107,19 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
         new QuaternionKeyframeTrack(`${copy.uuid}.quaternion`, sorted, rotations),
         new VectorKeyframeTrack(`${copy.uuid}.scale`, sorted, scales),
       ] : [];
+      if (keyedBones.length * sorted.length > 1000000) throw new Error("Bone animation is too large to export.");
+      for (const { track: boneTrack, bone } of keyedBones) {
+        const values: number[] = [];
+        let previous: Quaternion | undefined;
+        for (const time of sorted) {
+          const rotation = sampleBoneRotation(boneTrack, time);
+          if (!rotation) throw new Error("Invalid bone rotation track.");
+          if (previous && previous.dot(rotation) < 0) rotation.set(-rotation.x, -rotation.y, -rotation.z, -rotation.w);
+          values.push(...rotation.toArray());
+          previous = rotation;
+        }
+        tracks.push(new QuaternionKeyframeTrack(`${bone.uuid}.quaternion`, sorted, values));
+      }
       if (mixer) {
         const bones: Object3D[] = [];
         copy.traverse((node) => { if (node.type === "Bone") bones.push(node); });

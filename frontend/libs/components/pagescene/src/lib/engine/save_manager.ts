@@ -186,6 +186,9 @@ export class SaveManager {
       timeline.clipLanes = timeline.clipLanes.filter((l) =>
         liveUuids.has(l.objectUuid),
       );
+      if (timeline.boneTracks) {
+        timeline.boneTracks = timeline.boneTracks.filter((t) => liveUuids.has(t.objectUuid));
+      }
     }
 
     return {
