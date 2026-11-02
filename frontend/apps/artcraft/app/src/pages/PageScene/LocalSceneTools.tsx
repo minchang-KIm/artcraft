@@ -8,6 +8,7 @@ import { LocalWorkerSettings } from "~/pages/LocalWorkerSettings";
 import { LocalRecovery } from "~/pages/LocalRecovery";
 import { LocalWebcamPose } from "./LocalWebcamPose";
 import { LocalIKTools } from "./LocalIKTools";
+import { hasPosePreview } from "./pose-control-lease";
 import { useTabStore } from "~/pages/Stores/TabState";
 import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
@@ -62,7 +63,11 @@ export function LocalSceneTools() {
     if (busyRef.current) return;
     busyRef.current = true;
     setBusy(true);
-    try { setMessage(await work()); }
+    try {
+      const editor = getActiveEditor();
+      if (editor && hasPosePreview(editor)) throw new Error("Apply or cancel the active pose preview first.");
+      setMessage(await work());
+    }
     catch (error) { setMessage(`Error: ${error instanceof Error ? error.message : String(error)}`); }
     finally { busyRef.current = false; setBusy(false); }
   };

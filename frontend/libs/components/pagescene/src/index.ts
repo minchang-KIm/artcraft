@@ -106,6 +106,7 @@ export type {
 export { default as Editor } from "./lib/engine/editor";
 export { LandmarkBoneRetarget } from "./lib/engine/KinHelpers/landmark-retarget";
 export { solveTwoBoneIK } from "./lib/engine/KinHelpers/two-bone-ik";
+export { IKTargetHandle } from "./lib/engine/KinHelpers/IKTargetHandle";
 export type { LandmarkAxis, PoseLandmark, TrackingLossOptions, TrackingState } from "./lib/engine/KinHelpers/landmark-retarget";
 export type { EditorInitializeConfig } from "./lib/engine/editor";
 export { default as Scene } from "./lib/engine/scene";
