@@ -68,6 +68,7 @@ type SceneFrame = { id: string; kind: "scene-frame" | "scene-sequence"; duration
 
 type ImportedLinkInfo = {
   kind: "voice" | "dialogue";
+  elementId: string;
   sceneId: string | null;
   characterId: string | null;
   sourceText: string | null;
@@ -156,13 +157,13 @@ export function PageVideoEditor() {
       if (selected.length !== 1 || !scene) { setImportedLink(null); return; }
       const ref = selected[0];
       const voice = scene.tracks.audio.find(track => track.id === ref.trackId)?.elements.find(element => element.id === ref.elementId);
-      if (voice?.legacyVoice) {
-        const data = voice.legacyVoice;
+      if (voice?.legacyVoice || voice?.localSpeechGeneration?.sourceDialogueElementId) {
+        const data = voice.legacyVoice ?? { dialogueElementId: voice.localSpeechGeneration!.sourceDialogueElementId, sceneId: null, characterId: null, sourceText: voice.localSpeechGeneration!.text };
         const links: ImportedLinkInfo["links"] = [];
         for (const track of scene.tracks.overlay) if (track.type === "text") for (const element of track.elements) {
           if (element.id === data.dialogueElementId && element.legacyDialogue) links.push({ ref: { trackId: track.id, elementId: element.id }, startTime: element.startTime, hidden: track.hidden || !!element.hidden });
         }
-        setImportedLink({ kind: "voice", sceneId: data.sceneId, characterId: data.characterId, sourceText: data.sourceText, startTime: voice.startTime, links });
+        setImportedLink({ kind: "voice", elementId: voice.id, sceneId: data.sceneId, characterId: data.characterId, sourceText: data.sourceText, startTime: voice.startTime, links });
         return;
       }
       const track = scene.tracks.overlay.find(track => track.id === ref.trackId);
@@ -170,9 +171,9 @@ export function PageVideoEditor() {
       if (!dialogue?.legacyDialogue) { setImportedLink(null); return; }
       const links: ImportedLinkInfo["links"] = [];
       for (const audio of scene.tracks.audio) for (const element of audio.elements) {
-        if (element.legacyVoice?.dialogueElementId === dialogue.id) links.push({ ref: { trackId: audio.id, elementId: element.id }, startTime: element.startTime, hidden: false });
+        if (element.legacyVoice?.dialogueElementId === dialogue.id || element.localSpeechGeneration?.sourceDialogueElementId === dialogue.id) links.push({ ref: { trackId: audio.id, elementId: element.id }, startTime: element.startTime, hidden: false });
       }
-      setImportedLink({ kind: "dialogue", sceneId: dialogue.legacyDialogue.sceneId, characterId: dialogue.legacyDialogue.characterId, sourceText: typeof dialogue.params.content === "string" ? dialogue.params.content : null, startTime: dialogue.startTime, links });
+      setImportedLink({ kind: "dialogue", elementId: dialogue.id, sceneId: dialogue.legacyDialogue.sceneId, characterId: dialogue.legacyDialogue.characterId, sourceText: typeof dialogue.params.content === "string" ? dialogue.params.content : null, startTime: dialogue.startTime, links });
     };
     const unsubscribeSelection = editor.selection.subscribe(refresh);
     const unsubscribeScenes = editor.scenes.subscribe(refresh);
@@ -373,6 +374,7 @@ export function PageVideoEditor() {
       const editor = EditorCore.getInstance(), project = editor.project.getActive();
       if (!project) throw new Error("No active project.");
       const sceneId = editor.scenes.getActiveScene().id, startTime = editor.playback.getCurrentTime();
+      const sourceDialogueId = importedLink?.kind === "dialogue" && importedLink.sourceText === mockDialogue && importedLink.startTime === startTime ? importedLink.elementId : undefined;
       const result = await invoke<{ assetId: string; provenance: { schemaVersion: 1; providerId: "espeak-ng"; engineVersion: string; voice: string; wordsPerMinute: number; text: string; contentSha256: string; sampleRateHz: number; channels: number; durationSeconds: number } }>("total_recall_voice_generate", { text: mockDialogue, voice: speechVoice, wordsPerMinute: speechSpeed });
       const p = result.provenance;
       if (!p || p.schemaVersion !== 1 || p.providerId !== "espeak-ng" || p.text !== mockDialogue || p.voice !== speechVoice || p.wordsPerMinute !== speechSpeed || !/^[0-9a-f]{64}$/.test(p.contentSha256) || result.assetId !== `local-media:audio~wav:${p.contentSha256}` || !Number.isFinite(p.durationSeconds) || p.durationSeconds <= 0 || !Number.isFinite(p.sampleRateHz) || p.sampleRateHz <= 0 || ![1, 2].includes(p.channels) || typeof p.engineVersion !== "string") throw new Error("Invalid speech worker result.");
@@ -390,7 +392,8 @@ export function PageVideoEditor() {
       retained = registered.file === file;
       const element = buildElementFromMedia({ mediaId: result.assetId, mediaType: "audio", name, startTime, duration: mediaTimeFromSeconds({ seconds: p.durationSeconds }) });
       if (element.type !== "audio") throw new Error("Unexpected speech element.");
-      editor.timeline.insertElement({ element: { ...element, localSpeechGeneration: { ...p, generatedAtUtc: new Date().toISOString() } }, placement: { mode: "auto" } });
+      const currentDialogue = sourceDialogueId && editor.scenes.getActiveScene().tracks.overlay.flatMap(track => track.type === "text" ? track.elements : []).find(item => item.id === sourceDialogueId && item.legacyDialogue && item.params.content === mockDialogue && item.startTime === startTime);
+      editor.timeline.insertElement({ element: { ...element, localSpeechGeneration: { ...p, generatedAtUtc: new Date().toISOString(), ...(currentDialogue ? { sourceDialogueElementId: currentDialogue.id } : {}) } }, placement: { mode: "auto" } });
       setImportStatus("Local speech added at the playhead.");
     } catch (error) { setImportStatus(`Error: ${error instanceof Error ? error.message : String(error)}`); }
     finally { if (resolved && !retained) EditorCore.getInstance().adapters.mediaSource.releaseResolved?.(resolved); setImporting(false); }

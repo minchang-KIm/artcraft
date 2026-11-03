@@ -94,7 +94,7 @@ interface BaseAudioElement extends BaseTimelineElement {
   type: "audio";
   buffer?: AudioBuffer;
   mockVoiceGeneration?: MockVoiceGeneration;
-  localSpeechGeneration?: { schemaVersion: 1; providerId: "espeak-ng"; engineVersion: string; voice: string; wordsPerMinute: number; text: string; contentSha256: string; sampleRateHz: number; channels: number; durationSeconds: number; generatedAtUtc: string };
+  localSpeechGeneration?: { schemaVersion: 1; providerId: "espeak-ng"; engineVersion: string; voice: string; wordsPerMinute: number; text: string; contentSha256: string; sampleRateHz: number; channels: number; durationSeconds: number; generatedAtUtc: string; sourceDialogueElementId?: string };
   sceneAudio?: SceneAudioReference;
   legacyVoice?: LegacyVoiceReference;
   retime?: RetimeConfig;
