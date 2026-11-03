@@ -38,4 +38,21 @@ describe("bone timeline playback", () => {
     timeline.deleteBoneRotationKey(key.id);
     expect(timeline.getTimeline()?.boneTracks).toEqual([]);
   });
+
+  it("moves, eases and deletes bone keys through the shared timeline commands", () => {
+    const { timeline, character, bone, path } = fixture();
+    timeline.addBoneRotationKeys(character.uuid, [path]);
+    timeline.seekTo(2); bone.quaternion.set(0, 0, 1, 0); timeline.addBoneRotationKeys(character.uuid, [path]);
+    const track = timeline.getTimeline()!.boneTracks![0];
+    const [first, second] = track.keyframes;
+    timeline.moveKeyframe(second.id, 0);
+    expect(second.time).toBe(2);
+    timeline.moveKeyframe(second.id, 4);
+    expect(second.time).toBe(4);
+    timeline.setEasing(first.id, { p1x: 0.42, p1y: 0, p2x: 1, p2y: 1 });
+    timeline.seekTo(2);
+    expect(bone.quaternion.angleTo(new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2))).toBeGreaterThan(0.1);
+    timeline.deleteKeyframe(second.id);
+    expect(track.keyframes.map(key => key.id)).toEqual([first.id]);
+  });
 });

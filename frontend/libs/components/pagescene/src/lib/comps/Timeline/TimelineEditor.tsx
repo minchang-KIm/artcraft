@@ -45,6 +45,7 @@ export const TimelineEditor = () => {
   const isScrubbing = useRef(false);
 
   const tracks = usePageSceneStore((s) => s.timelineTracks);
+  const boneTracks = usePageSceneStore((s) => s.timelineBoneTracks);
   const clipLanes = usePageSceneStore((s) => s.timelineClipLanes);
   const characters = usePageSceneStore((s) => s.characters);
   const duration = usePageSceneStore((s) => s.timelineDuration);
@@ -97,8 +98,7 @@ export const TimelineEditor = () => {
     clipLanesByChar.set(lane.objectUuid, list);
   }
 
-  const selectedKeyframe = tracks
-    .flatMap((t) => t.keyframes)
+  const selectedKeyframe = [...tracks.flatMap((t) => t.keyframes), ...boneTracks.flatMap((t) => t.keyframes)]
     .find((k) => k.id === selectedKeyframeId);
 
   // The Motion popover edits the easing of the segment BETWEEN two
@@ -141,11 +141,11 @@ export const TimelineEditor = () => {
     [editor],
   );
   let easingAnchor: {
-    keyframe: (typeof tracks)[number]["keyframes"][number];
+    keyframe: (typeof tracks)[number]["keyframes"][number] | (typeof boneTracks)[number]["keyframes"][number];
     leftPercent: number;
   } | null = null;
   if (easingKeyframeId) {
-    for (const track of tracks) {
+    for (const track of [...tracks, ...boneTracks]) {
       const sorted = [...track.keyframes].sort((a, b) => a.time - b.time);
       const index = sorted.findIndex((k) => k.id === easingKeyframeId);
       if (index === -1) continue;
@@ -485,6 +485,15 @@ export const TimelineEditor = () => {
                     track={trackByUuid.get(item.id)}
                     duration={duration}
                   />
+                  {boneTracks.filter(track => track.objectUuid === item.id).map(track => (
+                    <TimelineTrackRow
+                      key={JSON.stringify(track.path)}
+                      item={{ ...item, name: track.path.at(-1)?.name || "Unnamed bone" }}
+                      track={track}
+                      duration={duration}
+                      bone
+                    />
+                  ))}
                   {clipRow && (
                     <TimelineClipRow
                       objectUuid={item.id}
@@ -576,8 +585,8 @@ export const TimelineEditor = () => {
       {/* footer */}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="ms-2 text-[11px] text-base-fg/40">
-          Each diamond stores an object's full position, rotation and scale at
-          that moment. Tap a diamond to jump to it.
+          Object diamonds store transforms; bone diamonds store local rotation.
+          Tap a diamond to jump to it.
         </span>
         <div className="flex items-center gap-2">
           {selectedKeyframe && (

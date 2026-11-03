@@ -168,7 +168,7 @@ const timelineNudge = (editor: Editor, direction: 1 | -1) => {
   const delta = direction / (timeline.fps || 30);
   const keyframeId = store.timelineSelectedKeyframeId;
   if (keyframeId) {
-    for (const track of timeline.tracks) {
+    for (const track of [...timeline.tracks, ...(timeline.boneTracks ?? [])]) {
       const keyframe = track.keyframes.find((k) => k.id === keyframeId);
       if (keyframe) {
         const time = Math.min(

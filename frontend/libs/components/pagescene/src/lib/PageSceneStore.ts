@@ -20,8 +20,9 @@ export type {
   TimelineData,
   ClipLane,
   ClipStrip,
+  BoneRotationTrack,
 } from "./engine/timeline/types";
-import type { TimelineTrack, ClipLane } from "./engine/timeline/types";
+import type { TimelineTrack, ClipLane, BoneRotationTrack } from "./engine/timeline/types";
 
 // A still (Capture) or video (Record) produced by Record mode, cached
 // locally (object URL) before any upload. Powers the completion modal's
@@ -200,6 +201,7 @@ interface PageSceneState {
   timelineIsPlaying: boolean;
   timelineDuration: number;
   timelineTracks: TimelineTrack[];
+  timelineBoneTracks: BoneRotationTrack[];
   timelineClipLanes: ClipLane[];
   timelineSelectedKeyframeId: string | null;
   // Selected clip strip (click-to-select). Drives the strip's × visibility
@@ -338,6 +340,7 @@ interface PageSceneState {
   setTimelineIsPlaying: (playing: boolean) => void;
   setTimelineDuration: (duration: number) => void;
   setTimelineTracks: (tracks: TimelineTrack[]) => void;
+  setTimelineBoneTracks: (tracks: BoneRotationTrack[]) => void;
   setTimelineClipLanes: (clipLanes: ClipLane[]) => void;
   setTimelineSelectedKeyframe: (id: string | null) => void;
   setTimelineSelectedClipLane: (id: string | null) => void;
@@ -444,6 +447,7 @@ export const usePageSceneStore = create<PageSceneState>((set, get) => ({
   timelineIsPlaying: false,
   timelineDuration: 10,
   timelineTracks: [],
+  timelineBoneTracks: [],
   timelineClipLanes: [],
   timelineSelectedKeyframeId: null,
   timelineSelectedClipLaneId: null,
@@ -559,6 +563,7 @@ export const usePageSceneStore = create<PageSceneState>((set, get) => ({
   setTimelineIsPlaying: (playing) => set({ timelineIsPlaying: playing }),
   setTimelineDuration: (duration) => set({ timelineDuration: duration }),
   setTimelineTracks: (tracks) => set({ timelineTracks: tracks }),
+  setTimelineBoneTracks: (tracks) => set({ timelineBoneTracks: tracks }),
   setTimelineClipLanes: (clipLanes) => set({ timelineClipLanes: clipLanes }),
   setTimelineSelectedKeyframe: (id) => set({ timelineSelectedKeyframeId: id }),
   setTimelineSelectedClipLane: (id) =>

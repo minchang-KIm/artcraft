@@ -145,13 +145,14 @@ export class EngineStoreBridge {
         store.setTimelineExists(e.exists);
         store.setTimelineDuration(e.duration);
         store.setTimelineTracks(e.tracks);
+        store.setTimelineBoneTracks(e.boneTracks);
         store.setTimelineClipLanes(e.clipLanes);
         // Prune selections whose target vanished — Cancel, undo of a Save
         // and scene loads replace timeline content wholesale, and a stale
         // id keeps TimelineEditor's capture-phase Del/Backspace handler
         // alive, eating the key meant for the selected scene object.
         const keyframeExists = (id: string) =>
-          e.tracks.some((t) => t.keyframes.some((k) => k.id === id));
+          [...e.tracks, ...e.boneTracks].some((t) => t.keyframes.some((k) => k.id === id));
         if (
           store.timelineSelectedKeyframeId &&
           !keyframeExists(store.timelineSelectedKeyframeId)

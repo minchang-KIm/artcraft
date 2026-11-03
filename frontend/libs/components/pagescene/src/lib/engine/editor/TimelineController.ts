@@ -334,6 +334,10 @@ export class TimelineController {
 
   deleteKeyframe(keyframeId: string): void {
     if (!this.timeline) return;
+    if (this.timeline.boneTracks?.some(track => track.keyframes.some(key => key.id === keyframeId))) {
+      this.deleteBoneRotationKey(keyframeId);
+      return;
+    }
     for (const track of this.timeline.tracks) {
       const idx = track.keyframes.findIndex((k) => k.id === keyframeId);
       if (idx >= 0) {
@@ -349,8 +353,19 @@ export class TimelineController {
   }
 
   moveKeyframe(keyframeId: string, time: number): void {
-    if (!this.timeline) return;
+    if (!this.timeline || !Number.isFinite(time)) return;
     const clamped = Math.max(0, Math.min(time, this.timeline.duration));
+    for (const track of this.timeline.boneTracks ?? []) {
+      const key = track.keyframes.find(item => item.id === keyframeId);
+      if (!key) continue;
+      // Duplicate times make quaternion sampling ambiguous. Keep the last
+      // valid position while dragging across another key on the same bone.
+      if (track.keyframes.some(item => item !== key && Math.abs(item.time - clamped) < 1e-3)) return;
+      key.time = clamped;
+      track.keyframes.sort((a, b) => a.time - b.time);
+      this.evaluate(); this.emitChanged();
+      return;
+    }
     for (const track of this.timeline.tracks) {
       const kf = track.keyframes.find((k) => k.id === keyframeId);
       if (kf) {
@@ -365,6 +380,13 @@ export class TimelineController {
 
   setEasing(keyframeId: string, easing: EasingSpec): void {
     if (!this.timeline) return;
+    for (const track of this.timeline.boneTracks ?? []) {
+      const key = track.keyframes.find(item => item.id === keyframeId);
+      if (!key) continue;
+      if (![easing.p1x, easing.p1y, easing.p2x, easing.p2y].every(Number.isFinite) || easing.p1x < 0 || easing.p1x > 1 || easing.p2x < 0 || easing.p2x > 1) return;
+      key.easing = { ...easing }; this.evaluate(); this.emitChanged();
+      return;
+    }
     for (const track of this.timeline.tracks) {
       const kf = track.keyframes.find((k) => k.id === keyframeId);
       if (kf) {
@@ -726,6 +748,7 @@ export class TimelineController {
         this.timeline?.duration ?? DEFAULT_TIMELINE_DURATION,
         this.timeline ? cloneTimeline(this.timeline).tracks : [],
         this.timeline ? cloneTimeline(this.timeline).clipLanes : [],
+        this.timeline ? cloneTimeline(this.timeline).boneTracks ?? [] : [],
       ),
     );
   }

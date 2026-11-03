@@ -66,7 +66,7 @@ export const useViewportKeyboard = (editor: Editor | null) => {
       const laneId = store.timelineSelectedClipLaneId;
       const timelineSelection =
         (keyframeId !== null &&
-          store.timelineTracks.some((t) =>
+          [...store.timelineTracks, ...store.timelineBoneTracks].some((t) =>
             t.keyframes.some((k) => k.id === keyframeId),
           )) ||
         (laneId !== null &&

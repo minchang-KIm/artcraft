@@ -137,6 +137,7 @@ export const Stage3DBody = ({
   const timelineExpanded = usePageSceneStore((s) => s.timelineExpanded);
   const setTimelineExpanded = usePageSceneStore((s) => s.setTimelineExpanded);
   const timelineTracks = usePageSceneStore((s) => s.timelineTracks);
+  const timelineBoneTracks = usePageSceneStore((s) => s.timelineBoneTracks);
   const is3DSceneLoaded = usePageSceneStore((s) => s.is3DSceneLoaded);
   const sceneMode = usePageSceneStore((s) => s.sceneMode);
   const isRecord = sceneMode === "record";
@@ -252,10 +253,10 @@ export const Stage3DBody = ({
   useEffect(() => {
     if (!editor || !is3DSceneLoaded || didAutoExpandTimelineRef.current) return;
     didAutoExpandTimelineRef.current = true;
-    if (timelineTracks.length > 0 || editor.sceneHasAnimation()) {
+    if (timelineTracks.length > 0 || timelineBoneTracks.length > 0 || editor.sceneHasAnimation()) {
       setTimelineExpanded(true);
     }
-  }, [editor, is3DSceneLoaded, timelineTracks, setTimelineExpanded]);
+  }, [editor, is3DSceneLoaded, timelineTracks, timelineBoneTracks, setTimelineExpanded]);
 
   // Reactive viewport sizing. useViewportSize listens to window
   // resize and re-renders the component. Falls back to

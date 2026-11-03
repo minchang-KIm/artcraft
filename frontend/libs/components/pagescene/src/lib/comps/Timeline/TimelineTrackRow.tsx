@@ -13,6 +13,7 @@ import {
   usePageSceneStore,
   type OutlinerItem,
   type TimelineTrack,
+  type BoneRotationTrack,
 } from "../../PageSceneStore";
 import { DEFAULT_TIMELINE_FPS } from "../../engine/timeline/types";
 import {
@@ -23,14 +24,16 @@ import {
 
 interface TimelineTrackRowProps {
   item: OutlinerItem;
-  track: TimelineTrack | undefined;
+  track: TimelineTrack | BoneRotationTrack | undefined;
   duration: number;
+  bone?: boolean;
 }
 
 export const TimelineTrackRow = ({
   item,
   track,
   duration,
+  bone = false,
 }: TimelineTrackRowProps) => {
   const editor = useContext(EngineContext);
   const laneRef = useRef<HTMLDivElement>(null);
@@ -91,6 +94,7 @@ export const TimelineTrackRow = ({
       <div
         ref={laneRef}
         className="relative h-9 flex-1 rounded-lg bg-white/5"
+        data-bone-lane={bone ? item.name : undefined}
         onPointerMove={(e) => {
           if (!draggingId.current || !editor) return;
           moveKeyframe(
@@ -156,6 +160,8 @@ export const TimelineTrackRow = ({
               role="button"
               tabIndex={0}
               data-keyframe
+              data-bone-keyframe={bone ? kf.id : undefined}
+              aria-label={`${bone ? "Bone" : "Object"} ${item.name} key at ${kf.time.toFixed(2)} seconds`}
               title={`${kf.time.toFixed(2)}s`}
               className={`absolute top-1/2 h-3 w-3 -translate-x-1/2 -translate-y-1/2 rotate-45 cursor-grab rounded-[2px] border transition-colors ${
                 selected
@@ -172,12 +178,15 @@ export const TimelineTrackRow = ({
                 setEasingKeyframe(null);
                 selectKeyframe(kf.id, kf.time);
               }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") { e.preventDefault(); selectKeyframe(kf.id, kf.time); }
+              }}
             />
           );
         })}
       </div>
 
-      <button
+      {!bone ? <button
         type="button"
         title="Add keyframe at playhead"
         className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-base-fg/70 hover:bg-white/10 hover:text-base-fg"
@@ -186,7 +195,7 @@ export const TimelineTrackRow = ({
         }}
       >
         <span className="block h-2 w-2 rotate-45 rounded-[1px] border-[1.5px] border-current" />
-      </button>
+      </button> : <div className="w-7 shrink-0" />}
     </div>
   );
 };
