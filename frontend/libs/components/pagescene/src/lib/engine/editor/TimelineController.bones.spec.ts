@@ -79,4 +79,19 @@ describe("bone timeline playback", () => {
     expect(keyed.quaternion.angleTo(new Quaternion())).toBeCloseTo(0);
     expect(other.quaternion.z).toBeGreaterThan(0.9);
   });
+  it("captures bone position and scale without altering the character root or losing channels on an IK key", () => {
+    const { timeline, character, bone, path } = fixture();
+    character.position.x = 7; bone.position.x = 1; bone.scale.setScalar(1);
+    timeline.addBoneRotationKeys(character.uuid, [path], true);
+    timeline.seekTo(2); bone.position.x = 3; bone.scale.setScalar(3);
+    timeline.addBoneRotationKeys(character.uuid, [path], true);
+    timeline.addBoneRotationKeys(character.uuid, [path]);
+    timeline.seekTo(1);
+    expect(bone.position.x).toBeCloseTo(2); expect(bone.scale.x).toBeCloseTo(2);
+    expect(character.position.x).toBe(7);
+    expect(timeline.getTimeline()!.boneTracks![0].keyframes[1].position).toEqual([3,0,0]);
+    const saved = JSON.parse(JSON.stringify(timeline.getTimeline()));
+    bone.position.x = 99; bone.scale.setScalar(99); timeline.loadTimeline(saved);
+    expect(bone.position.x).toBeCloseTo(2); expect(bone.scale.x).toBeCloseTo(2);
+  });
 });

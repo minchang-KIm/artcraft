@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { Bone, Group, Quaternion, Vector3 } from "three";
-import { resolveBonePath, sampleBoneRotation } from "./boneRotation";
+import { resolveBonePath, sampleBoneRotation, sampleBoneVector } from "./boneRotation";
 import { EASING_PRESETS, type BoneRotationTrack } from "./types";
 
 const track = (): BoneRotationTrack => ({
@@ -40,5 +40,15 @@ describe("bone rotation tracks", () => {
     expect(sampleBoneRotation(t, 1)).toBeNull();
     t.keyframes[1].time = 2; t.keyframes[0].easing = { ...EASING_PRESETS.linear, p1x: 2 };
     expect(sampleBoneRotation(t, 1)).toBeNull();
+  });
+  it("samples sparse position and scale channels without changing legacy rotations", () => {
+    const t = track();
+    expect(sampleBoneVector(t, 1, "position")).toBeUndefined();
+    t.keyframes[0].position = [0, 1, 2]; t.keyframes[1].position = [2, 3, 4];
+    t.keyframes[0].scale = [1, 1, 1]; t.keyframes[1].scale = [3, 3, 3];
+    expect(sampleBoneVector(t, 1, "position")?.toArray()).toEqual([1, 2, 3]);
+    expect(sampleBoneVector(t, 1, "scale")?.toArray()).toEqual([2, 2, 2]);
+    t.keyframes[1].position = [NaN, 0, 0];
+    expect(sampleBoneVector(t, 1, "position")).toBeNull();
   });
 });

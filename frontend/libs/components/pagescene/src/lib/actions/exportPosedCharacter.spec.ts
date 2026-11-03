@@ -41,14 +41,15 @@ describe("posed GLB export", () => {
     const timeline = { duration: 2, fps: 30, clipLanes: [], tracks: [{ objectUuid: root.uuid, keyframes: [
       { id: "root", time: 0, easing, transform: { position: { x: 3, y: 0, z: 0 }, rotation: { x: 0, y: 0, z: 0 }, scale: { x: 1, y: 1, z: 1 } } },
     ] }], boneTracks: [{ objectUuid: root.uuid, path: [{ index: 0, name: "arm", type: "Bone" }], keyframes: [
-      { id: "a", time: 0, easing, rotation: [0, 0, 0, 1] as [number, number, number, number] },
-      { id: "b", time: 2, easing, rotation: [0, 0, 1, 0] as [number, number, number, number] },
+      { id: "a", time: 0, easing, rotation: [0, 0, 0, 1] as [number, number, number, number], position: [0, 0, 0] as [number, number, number], scale: [1, 1, 1] as [number, number, number] },
+      { id: "b", time: 2, easing, rotation: [0, 0, 1, 0] as [number, number, number, number], position: [2, 0, 0] as [number, number, number], scale: [3, 3, 3] as [number, number, number] },
     ] }] };
     const bytes = await exportPosedCharacter(root, timeline);
     const gltf = await new GLTFLoader().parseAsync(bytes, "");
     const mixer = new AnimationMixer(gltf.scene); mixer.clipAction(gltf.animations[0]).play(); mixer.setTime(1);
     const exportedBone = gltf.scene.getObjectByName("arm")!;
     expect(exportedBone.quaternion.clone().normalize().angleTo(new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2))).toBeCloseTo(0, 4);
+    expect(exportedBone.position.x).toBeCloseTo(1); expect(exportedBone.scale.x).toBeCloseTo(2);
     expect(gltf.scene.getObjectByName("character")!.position.x).toBeCloseTo(3);
     expect(bone.quaternion.angleTo(new Quaternion())).toBeCloseTo(0);
     expect(root.position.x).toBe(0);
@@ -73,12 +74,14 @@ describe("posed GLB export", () => {
     const lane = { id: "lane", objectUuid: root.uuid, strip: { id: "strip", sourceMediaId: "", bakedClipIndex: 0, name: "motion", startTime: 0, duration: 2, loop: false } };
     editor.characterAnimationManager.sync([lane]);
     const timeline = { duration: 2, fps: 30, tracks: [], clipLanes: [lane], boneTracks: [{ objectUuid: root.uuid, path: [{ index: 0, name: "keyed", type: "Bone" }], keyframes: [
-      { id: "key", time: 0, easing: EASING_PRESETS.linear, rotation: [0, 0, 0, 1] as [number, number, number, number] },
+      { id: "key", time: 0, easing: EASING_PRESETS.linear, rotation: [0, 0, 0, 1] as [number, number, number, number], position: [1, 0, 0] as [number, number, number], scale: [2, 2, 2] as [number, number, number] },
     ] }] };
     const bytes = await exportPosedCharacter(root, timeline, editor);
     const gltf = await new GLTFLoader().parseAsync(bytes, "");
     const mixer = new AnimationMixer(gltf.scene); mixer.clipAction(gltf.animations[0]).play(); mixer.setTime(1);
     expect(gltf.scene.getObjectByName("keyed")!.quaternion.clone().normalize().angleTo(new Quaternion())).toBeCloseTo(0, 4);
+    expect(gltf.scene.getObjectByName("keyed")!.position.x).toBeCloseTo(1);
+    expect(gltf.scene.getObjectByName("keyed")!.scale.x).toBeCloseTo(2);
     expect(gltf.scene.getObjectByName("other")!.quaternion.clone().normalize().angleTo(new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2))).toBeCloseTo(0, 4);
   });
 });

@@ -220,8 +220,8 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
       character.traverse(node => { if (node.type === "Bone") paths.push(pathTo(character, node)); });
       if (!paths.length) throw new Error("The selected character has no bones.");
       editor.timelineController.create();
-      editor.timelineController.recordEdit("Key all bone rotations", () => editor.timelineController.addBoneRotationKeys(character.uuid, paths));
-      setStatus(`All bone rotations keyed at ${editor.timelineController.getPlayhead().toFixed(2)} seconds. Save the local scene to retain it.`);
+      editor.timelineController.recordEdit("Key full pose", () => editor.timelineController.addBoneRotationKeys(character.uuid, paths, true));
+      setStatus(`Full pose keyed at ${editor.timelineController.getPlayhead().toFixed(2)} seconds. Save the local scene to retain it.`);
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
@@ -290,7 +290,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     <button type="button" disabled={!upperId || !middleId || !endId || handling} onClick={apply}>Apply IK target</button>
     {!handling ? <button type="button" disabled={!upperId || !middleId || !endId} onClick={startHandle}>Start IK handle</button> : <><button type="button" onClick={() => stopHandle(true)}>Apply IK handle</button><button type="button" onClick={() => stopHandle(false)}>Cancel IK handle</button></>}
     <button type="button" disabled={!upperId || !middleId || handling} onClick={keyPose}>Key IK pose at playhead</button>
-    <button type="button" disabled={!bones.length || handling || restoring} onClick={keyFullPose}>Key all bone rotations at playhead</button>
+    <button type="button" disabled={!bones.length || handling || restoring} onClick={keyFullPose}>Key full pose at playhead</button>
     <button type="button" disabled={!bones.length || handling || restoring} onClick={() => void restoreRestPose()}>Restore local rest pose</button>
     {keys.length > 0 && <ul aria-label="Bone rotation keys">{keys.map(key => <li key={key.id}><button type="button" disabled={handling} onClick={() => { const editor = getActiveEditor(); if (editor && !hasPosePreview(editor)) { editor.timelineController.pause(); editor.timelineController.seekTo(key.time); } }}>{key.bone} · {key.time.toFixed(2)}s</button> <button type="button" disabled={handling} aria-label={`Delete ${key.bone} key at ${key.time.toFixed(2)} seconds`} onClick={() => removeKey(key.id)}>Delete</button></li>)}</ul>}
     {status && <p role="status">{status}</p>}

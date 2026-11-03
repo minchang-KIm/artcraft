@@ -11,7 +11,7 @@ import type Editor from "../editor";
 import { snapshotTransform, writeTransform } from "./actions/snapshots";
 import { TimelineEditAction } from "./actions/TimelineEditAction";
 import { sampleTrackAt } from "../timeline/interpolation";
-import { resolveBonePath, sampleBoneRotation } from "../timeline/boneRotation";
+import { resolveBonePath, sampleBoneRotation, sampleBoneVector } from "../timeline/boneRotation";
 import {
   cloneTimeline,
   DEFAULT_EASING,
@@ -255,7 +255,7 @@ export class TimelineController {
   // ─── keyframe editing ──────────────────────────────────────────────────
 
   /** Capture local bone rotations atomically, without changing the root transform. */
-  addBoneRotationKeys(objectUuid: string, paths: BonePathPart[][]): void {
+  addBoneRotationKeys(objectUuid: string, paths: BonePathPart[][], includeTransforms = false): void {
     const timeline = this.timeline;
     if (!timeline || this.isPlaying) throw new Error("Pause the timeline before keying a pose.");
     this.editor.characterAnimationManager.assertReadyForCapture(timeline.clipLanes.filter(lane => lane.objectUuid === objectUuid));
@@ -263,7 +263,7 @@ export class TimelineController {
     if (!root || !root.userData.isCharacter || !paths.length) throw new Error("Select a character and at least one bone.");
     const identities = paths.map(path => JSON.stringify(path));
     const bones = paths.map(path => resolveBonePath(root, path));
-    if (new Set(identities).size !== paths.length || bones.some(bone => !bone || ![bone.quaternion.x, bone.quaternion.y, bone.quaternion.z, bone.quaternion.w].every(Number.isFinite) || bone.quaternion.lengthSq() < 1e-12)) throw new Error("The selected bone paths or rotations are invalid.");
+    if (new Set(identities).size !== paths.length || bones.some(bone => !bone || ![bone.quaternion.x, bone.quaternion.y, bone.quaternion.z, bone.quaternion.w, ...(includeTransforms ? [...bone.position.toArray(), ...bone.scale.toArray()] : [])].every(Number.isFinite) || bone.quaternion.lengthSq() < 1e-12)) throw new Error("The selected bone paths or transforms are invalid.");
     const tracks = timeline.boneTracks ?? (timeline.boneTracks = []);
     paths.forEach((path, index) => {
       let track = tracks.find(item => item.objectUuid === objectUuid && JSON.stringify(item.path) === identities[index]);
@@ -271,8 +271,9 @@ export class TimelineController {
         track = { objectUuid, path: path.map(part => ({ ...part })), keyframes: [] };
         tracks.push(track);
       }
-      const key = { id: THREE.MathUtils.generateUUID(), time: this.playhead, rotation: bones[index]!.quaternion.clone().normalize().toArray() as [number, number, number, number], easing: { ...DEFAULT_EASING } };
       const existing = track.keyframes.findIndex(item => Math.abs(item.time - this.playhead) < 1e-3);
+      const old = existing < 0 ? undefined : track.keyframes[existing];
+      const key = { ...old, id: THREE.MathUtils.generateUUID(), time: this.playhead, rotation: bones[index]!.quaternion.clone().normalize().toArray() as [number, number, number, number], easing: old?.easing ?? { ...DEFAULT_EASING }, ...(includeTransforms ? { position: bones[index]!.position.toArray() as [number, number, number], scale: bones[index]!.scale.toArray() as [number, number, number] } : {}) };
       if (existing < 0) track.keyframes.push(key); else track.keyframes[existing] = key;
       track.keyframes.sort((a, b) => a.time - b.time);
     });
@@ -662,7 +663,8 @@ export class TimelineController {
       if (!root || !root.userData.isCharacter) continue;
       const bone = resolveBonePath(root, track.path);
       const rotation = sampleBoneRotation(track, time);
-      if (bone && rotation) bone.quaternion.copy(rotation);
+      const position = sampleBoneVector(track, time, "position"), scale = sampleBoneVector(track, time, "scale");
+      if (bone && rotation && position !== null && scale !== null) { bone.quaternion.copy(rotation); if (position) bone.position.copy(position); if (scale) bone.scale.copy(scale); }
     }
   }
 

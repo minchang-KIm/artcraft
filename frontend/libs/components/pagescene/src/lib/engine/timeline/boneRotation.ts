@@ -1,4 +1,4 @@
-import { Object3D, Quaternion } from "three";
+import { Object3D, Quaternion, Vector3 } from "three";
 import { cubicBezierYForX } from "./interpolation";
 import type { BonePathPart, BoneRotationTrack } from "./types";
 
@@ -38,4 +38,25 @@ export function sampleBoneRotation(track: BoneRotationTrack, time: number): Quat
     }
   }
   return rotations[rotations.length - 1];
+}
+
+/** Sample an optional sparse vector channel. Undefined means no such keys. */
+export function sampleBoneVector(track: BoneRotationTrack, time: number, channel: "position" | "scale"): Vector3 | null | undefined {
+  if (!Number.isFinite(time) || !Array.isArray(track.keyframes)) return null;
+  const keys = track.keyframes.filter(key => key && key[channel] !== undefined);
+  if (!keys.length) return undefined;
+  let previous = -Infinity;
+  for (const key of keys) {
+    const value = key[channel];
+    if (!Array.isArray(value) || value.length !== 3 || !value.every(Number.isFinite) || !Number.isFinite(key.time) || key.time < 0 || key.time <= previous || !key.easing || ![key.easing.p1x,key.easing.p1y,key.easing.p2x,key.easing.p2y].every(Number.isFinite) || key.easing.p1x < 0 || key.easing.p1x > 1 || key.easing.p2x < 0 || key.easing.p2x > 1) return null;
+    previous = key.time;
+  }
+  if (time <= keys[0].time) return new Vector3(...keys[0][channel]!);
+  for (let i = 1; i < keys.length; i++) {
+    if (time <= keys[i].time) {
+      const a = keys[i - 1], b = keys[i];
+      return new Vector3(...a[channel]!).lerp(new Vector3(...b[channel]!), cubicBezierYForX(a.easing, (time - a.time) / (b.time - a.time)));
+    }
+  }
+  return new Vector3(...keys[keys.length - 1][channel]!);
 }

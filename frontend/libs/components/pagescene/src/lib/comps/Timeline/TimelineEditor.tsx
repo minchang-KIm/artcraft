@@ -585,7 +585,7 @@ export const TimelineEditor = () => {
       {/* footer */}
       <div className="mt-3 flex items-center justify-between gap-2">
         <span className="ms-2 text-[11px] text-base-fg/40">
-          Object diamonds store transforms; bone diamonds store local rotation.
+          Object diamonds store transforms; bone diamonds store local pose keys.
           Tap a diamond to jump to it.
         </span>
         <div className="flex items-center gap-2">

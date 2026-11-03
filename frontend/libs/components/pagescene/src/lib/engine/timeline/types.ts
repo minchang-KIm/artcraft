@@ -41,6 +41,9 @@ export interface BoneRotationKeyframe {
   id: string;
   time: number;
   rotation: [number, number, number, number];
+  // Missing channels preserve legacy rotation-only tracks and clip motion.
+  position?: [number, number, number];
+  scale?: [number, number, number];
   easing: EasingSpec;
 }
 
