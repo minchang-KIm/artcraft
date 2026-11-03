@@ -79,6 +79,8 @@ export function PageVideoEditor() {
   const [importStatus, setImportStatus] = useState("");
   const [importing, setImporting] = useState(false);
   const [mockDialogue, setMockDialogue] = useState("");
+  const [speechVoice, setSpeechVoice] = useState("ko");
+  const [speechSpeed, setSpeechSpeed] = useState(175);
   const [sceneFrames, setSceneFrames] = useState<SceneFrame[]>([]);
   const [selectedFrame, setSelectedFrame] = useState("");
   const [localProjects, setLocalProjects] = useState<Array<{ id: string; name: string }>>([]);
@@ -361,6 +363,38 @@ export function PageVideoEditor() {
     finally { setImporting(false); }
   };
 
+  const addLocalSpeech = async () => {
+    if (importing) return;
+    setImporting(true);
+    let resolved: Awaited<ReturnType<ReturnType<typeof EditorCore.getInstance>["adapters"]["mediaSource"]["resolveMedia"]>> | undefined;
+    let retained = false;
+    try {
+      const editor = EditorCore.getInstance(), project = editor.project.getActive();
+      if (!project) throw new Error("No active project.");
+      const sceneId = editor.scenes.getActiveScene().id, startTime = editor.playback.getCurrentTime();
+      const result = await invoke<{ assetId: string; provenance: { schemaVersion: 1; providerId: "espeak-ng"; engineVersion: string; voice: string; wordsPerMinute: number; text: string; contentSha256: string; sampleRateHz: number; channels: number; durationSeconds: number } }>("total_recall_voice_generate", { text: mockDialogue, voice: speechVoice, wordsPerMinute: speechSpeed });
+      const p = result.provenance;
+      if (!p || p.schemaVersion !== 1 || p.providerId !== "espeak-ng" || p.text !== mockDialogue || p.voice !== speechVoice || p.wordsPerMinute !== speechSpeed || !/^[0-9a-f]{64}$/.test(p.contentSha256) || result.assetId !== `local-media:audio~wav:${p.contentSha256}` || !Number.isFinite(p.durationSeconds) || p.durationSeconds <= 0 || !Number.isFinite(p.sampleRateHz) || p.sampleRateHz <= 0 || ![1, 2].includes(p.channels) || typeof p.engineVersion !== "string") throw new Error("Invalid speech worker result.");
+      if (editor.project.getActive()?.metadata.id !== project.metadata.id || editor.scenes.getActiveScene().id !== sceneId) throw new Error("Project or scene changed before speech was added.");
+      resolved = await editor.adapters.mediaSource.resolveMedia({ id: result.assetId, kind: "audio" });
+      const response = await fetch(resolved.url);
+      if (!response.ok) throw new Error("Cannot read generated speech.");
+      const blob = await response.blob();
+      if (blob.type !== "audio/wav" || !blob.size || blob.size > 50 * 1024 * 1024) throw new Error("Invalid speech WAV.");
+      const file = new File([blob], "local-speech.wav", { type: "audio/wav" });
+      if (editor.project.getActive()?.metadata.id !== project.metadata.id || editor.scenes.getActiveScene().id !== sceneId) throw new Error("Project or scene changed before speech was added.");
+      const name = `[eSpeak NG] ${mockDialogue.trim()}`;
+      const registered = await editor.media.addMediaAsset({ asset: { id: result.assetId, name, type: "audio", file, url: resolved.url, duration: p.durationSeconds } });
+      if (!registered) throw new Error("Could not add speech to media.");
+      retained = registered.file === file;
+      const element = buildElementFromMedia({ mediaId: result.assetId, mediaType: "audio", name, startTime, duration: mediaTimeFromSeconds({ seconds: p.durationSeconds }) });
+      if (element.type !== "audio") throw new Error("Unexpected speech element.");
+      editor.timeline.insertElement({ element: { ...element, localSpeechGeneration: { ...p, generatedAtUtc: new Date().toISOString() } }, placement: { mode: "auto" } });
+      setImportStatus("Local speech added at the playhead.");
+    } catch (error) { setImportStatus(`Error: ${error instanceof Error ? error.message : String(error)}`); }
+    finally { if (resolved && !retained) EditorCore.getInstance().adapters.mediaSource.releaseResolved?.(resolved); setImporting(false); }
+  };
+
   const saveRenderSnapshot = async () => {
     if (importing) return;
     setImporting(true);
@@ -459,9 +493,12 @@ export function PageVideoEditor() {
       <details className="absolute left-4 top-32 z-20 rounded bg-ui-controls p-2 text-white">
         <summary>Dialogue tools</summary>
         <div className="flex flex-col gap-1">
-        <label htmlFor="mock-dialogue">Mock dialogue (tone only, no speech)</label>
+        <label htmlFor="mock-dialogue">Dialogue text</label>
         <textarea id="mock-dialogue" className="text-black" maxLength={500} value={mockDialogue} onChange={(event) => setMockDialogue(event.target.value)} />
         <button type="button" disabled={importing || !mockDialogue.trim()} onClick={() => void addMockDialogue()}>Add mock tone at playhead</button>
+        <label>eSpeak voice <input aria-label="eSpeak voice" className="text-black" value={speechVoice} maxLength={64} onChange={event => setSpeechVoice(event.target.value)} /></label>
+        <label>Words per minute <input aria-label="Words per minute" className="text-black" type="number" min={80} max={450} value={speechSpeed} onChange={event => setSpeechSpeed(Number(event.target.value))} /></label>
+        <button type="button" disabled={importing || !mockDialogue.trim()} onClick={() => void addLocalSpeech()}>Add local speech at playhead</button>
         {importedLink && <section aria-label="Imported dialogue link" className="max-w-72 border-t pt-2 text-sm">
           <p>{importedLink.kind === "voice" ? "Imported voice" : "Imported dialogue"}</p>
           <p>Scene: {importedLink.sceneId ?? "unknown"}; character: {importedLink.characterId ?? "unknown"}</p>

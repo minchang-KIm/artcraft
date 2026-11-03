@@ -1,3 +1,4 @@
+pub mod voice_generate;
 pub mod asset_get;
 pub mod asset_put;
 pub mod backup;
