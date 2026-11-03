@@ -6,6 +6,7 @@ import { resolveBonePath, sampleBoneRotation, sampleBoneVector } from "../engine
 import { cloneTimeline, type TimelineData } from "../engine/timeline/types";
 import type Editor from "../engine/editor";
 import { CharacterAnimationManager } from "../engine/animation/CharacterAnimationManager";
+import { validateExportedGlb } from "./validateExportedGlb";
 
 /** Serialize a supported rig and, optionally, its object transform timeline. */
 export async function exportPosedCharacter(character: Object3D, sourceTimeline?: TimelineData | null, editor?: Editor): Promise<ArrayBuffer> {
@@ -160,5 +161,6 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
   }
   const data = await new GLTFExporter().parseAsync(scene, { binary: true, onlyVisible: true, animations });
   if (!(data instanceof ArrayBuffer) || data.byteLength > 50 * 1024 * 1024) throw new Error("Export exceeds the GLB size limit.");
+  await validateExportedGlb(data);
   return data;
 }

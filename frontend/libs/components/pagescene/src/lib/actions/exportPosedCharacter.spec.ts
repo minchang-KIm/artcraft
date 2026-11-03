@@ -58,12 +58,12 @@ describe("posed GLB export", () => {
   });
   it("exports bone keys over a clip while retaining other animated bones", async () => {
     const root = new Group(); root.userData.isCharacter = true;
-    const keyed = new Bone(), other = new Bone(); keyed.name = "keyed"; other.name = "other";
+    const armature = new Bone(), keyed = new Bone(), other = new Bone(); armature.name = "armature"; keyed.name = "keyed"; other.name = "other"; armature.add(keyed, other);
     const geometry = new BoxGeometry(), count = geometry.getAttribute("position").count;
     geometry.setAttribute("skinIndex", new Uint16BufferAttribute(new Uint16Array(count * 4), 4));
     const weights = new Float32Array(count * 4); for (let i = 0; i < count; i++) weights[i * 4] = 1;
     geometry.setAttribute("skinWeight", new Float32BufferAttribute(weights, 4));
-    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial()); root.add(keyed, other, mesh); mesh.bind(new Skeleton([keyed, other]));
+    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial()); root.add(armature, mesh); mesh.bind(new Skeleton([armature, keyed, other]));
     root.animations = [new AnimationClip("motion", 2, [
       new QuaternionKeyframeTrack("keyed.quaternion", [0, 2], [0, 0, 0, 1, 0, 0, 1, 0]),
       new QuaternionKeyframeTrack("other.quaternion", [0, 2], [0, 0, 0, 1, 0, 0, 1, 0]),
@@ -73,7 +73,7 @@ describe("posed GLB export", () => {
     editor.characterAnimationManager = new CharacterAnimationManager(editor);
     const lane = { id: "lane", objectUuid: root.uuid, strip: { id: "strip", sourceMediaId: "", bakedClipIndex: 0, name: "motion", startTime: 0, duration: 2, loop: false } };
     editor.characterAnimationManager.sync([lane]);
-    const timeline = { duration: 2, fps: 30, tracks: [], clipLanes: [lane], boneTracks: [{ objectUuid: root.uuid, path: [{ index: 0, name: "keyed", type: "Bone" }], keyframes: [
+    const timeline = { duration: 2, fps: 30, tracks: [], clipLanes: [lane], boneTracks: [{ objectUuid: root.uuid, path: [{ index: 0, name: "armature", type: "Bone" }, { index: 0, name: "keyed", type: "Bone" }], keyframes: [
       { id: "key", time: 0, easing: EASING_PRESETS.linear, rotation: [0, 0, 0, 1] as [number, number, number, number], position: [1, 0, 0] as [number, number, number], scale: [2, 2, 2] as [number, number, number] },
     ] }] };
     const bytes = await exportPosedCharacter(root, timeline, editor);
@@ -83,5 +83,14 @@ describe("posed GLB export", () => {
     expect(gltf.scene.getObjectByName("keyed")!.position.x).toBeCloseTo(1);
     expect(gltf.scene.getObjectByName("keyed")!.scale.x).toBeCloseTo(2);
     expect(gltf.scene.getObjectByName("other")!.quaternion.clone().normalize().angleTo(new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2))).toBeCloseTo(0, 4);
+  });
+  it("rejects a skin with disconnected skeleton roots", async () => {
+    const root = new Group(); root.userData.isCharacter = true;
+    const first = new Bone(), second = new Bone(), geometry = new BoxGeometry(), count = geometry.getAttribute("position").count;
+    geometry.setAttribute("skinIndex", new Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+    const weights = new Float32Array(count * 4); for (let i = 0; i < count; i++) weights[i * 4] = 1;
+    geometry.setAttribute("skinWeight", new Float32BufferAttribute(weights, 4));
+    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial()); root.add(first, second, mesh); mesh.bind(new Skeleton([first, second]));
+    await expect(exportPosedCharacter(root)).rejects.toThrow("SKIN_SKELETON_INVALID");
   });
 });
