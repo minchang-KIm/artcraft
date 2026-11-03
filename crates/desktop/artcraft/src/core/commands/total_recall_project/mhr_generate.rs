@@ -7,12 +7,15 @@ use tauri::State;
 
 /// Run only the configured local worker; no executable or path comes from the UI.
 #[tauri::command]
-pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, identity: Vec<f64>, target_height_cm: Option<f64>) -> Result<serde_json::Value, String> {
+pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, identity: Vec<f64>, target_height_cm: Option<f64>, target_torso_cm: Option<f64>) -> Result<serde_json::Value, String> {
   if identity.len() != 45 || identity.iter().any(|v| !v.is_finite() || !(-3.0..=3.0).contains(v)) {
     return Err("MHR identity must contain 45 finite values between -3 and 3".into());
   }
   if target_height_cm.is_some_and(|height| !height.is_finite() || !(50.0..=250.0).contains(&height)) {
     return Err("Target height must be between 50 and 250 cm".into());
+  }
+  if target_torso_cm.is_some_and(|value| !value.is_finite() || !(30.0..=200.0).contains(&value)) {
+    return Err("Target torso slice must be between 30 and 200 cm".into());
   }
   let python = configured(&app_data_root, "TOTAL_RECALL_MHR_PYTHON")?;
   let worker = configured(&app_data_root, "TOTAL_RECALL_MHR_WORKER")?;
@@ -31,6 +34,7 @@ pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, id
     command.arg(worker).arg("--model").arg(model).arg("--mhr-root").arg(root)
       .arg("--identity").arg(identity_path).arg("--output").arg(&output_path);
     if let Some(height) = target_height_cm { command.arg("--target-height-cm").arg(height.to_string()); }
+    if let Some(torso) = target_torso_cm { command.arg("--target-torso-cm").arg(torso.to_string()); }
     let mut child = command.stdout(Stdio::from(log)).stderr(Stdio::from(stderr)).spawn().map_err(|e| format!("MHR worker could not start: {e}"))?;
     let deadline = Instant::now() + Duration::from_secs(240);
     let status = loop {
