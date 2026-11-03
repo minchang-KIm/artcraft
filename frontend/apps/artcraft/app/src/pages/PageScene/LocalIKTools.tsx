@@ -69,7 +69,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     handleSession.current = null;
     const { editor, character, upper, middle, end, entries } = current;
     const selected = editor.sceneManager?.selected_objects;
-    const valid = editor.isLive && getActiveEditor() === editor && selected?.length === 1 && selected[0] === character && editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) === character && character.getObjectByProperty("uuid", upper.uuid) === upper && character.getObjectByProperty("uuid", middle.uuid) === middle && character.getObjectByProperty("uuid", end.uuid) === end && !editor.timelineController.getTimeline()?.clipLanes.some((lane: { objectUuid: string }) => lane.objectUuid === character.uuid) && !editor.timelineController.getIsPlaying();
+    const valid = editor.isLive && getActiveEditor() === editor && selected?.length === 1 && selected[0] === character && editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) === character && character.getObjectByProperty("uuid", upper.uuid) === upper && character.getObjectByProperty("uuid", middle.uuid) === middle && character.getObjectByProperty("uuid", end.uuid) === end && !editor.timelineController.getIsPlaying();
     let accepted = false, failure = "";
     try {
       if (commit && valid) {
@@ -112,7 +112,10 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
       if (handleSession.current) { stopHandle(false); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
     });
     const poseMode = editor.bus.subscribe(PoseModeChangedEvent, () => stopHandle(false));
-    const changed = editor.bus.subscribe(TimelineChangedEvent, refreshKeys);
+    const changed = editor.bus.subscribe(TimelineChangedEvent, () => {
+      if (handleSession.current) { stopHandle(false); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
+      refreshKeys();
+    });
     return () => { selection(); reset(); timeline(); poseMode(); changed(); stopHandle(false, false); };
   }, [editorInitialized]);
 
@@ -142,7 +145,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     try {
       if (!editor || !character || editor.timelineController.getIsPlaying()) throw new Error("Select one character and pause the timeline.");
       if (hasPosePreview(editor)) throw new Error("Stop or apply the webcam preview before using IK.");
-      if (editor.timelineController.getTimeline()?.clipLanes.some((lane: { objectUuid: string }) => lane.objectUuid === character.uuid)) throw new Error("Remove this character's motion clips before editing its IK pose.");
+      editor.characterAnimationManager.assertReadyForCapture(editor.timelineController.getTimeline()?.clipLanes.filter(lane => lane.objectUuid === character.uuid) ?? []);
       const upper = character.getObjectByProperty("uuid", upperId), middle = character.getObjectByProperty("uuid", middleId), end = character.getObjectByProperty("uuid", endId);
       if (!upper || !middle || !end) throw new Error("Select the upper, middle, and end bones.");
       const values = target.map(value => value.trim() ? Number(value) : NaN), degrees = limit.trim() ? Number(limit) : NaN;
@@ -162,7 +165,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     try {
       if (!editor || !character || !editor.isLive || editor.timelineController.getIsPlaying() || editor.getPoseMode() !== "select") throw new Error("Select one character, pause the timeline, and use selection mode.");
       if (hasPosePreview(editor)) throw new Error("Stop or apply the active pose preview first.");
-      if (editor.timelineController.getTimeline()?.clipLanes.some((lane: { objectUuid: string }) => lane.objectUuid === character.uuid)) throw new Error("Remove this character's motion clips before editing its IK pose.");
+      editor.characterAnimationManager.assertReadyForCapture(editor.timelineController.getTimeline()?.clipLanes.filter(lane => lane.objectUuid === character.uuid) ?? []);
       const upper = character.getObjectByProperty("uuid", upperId), middle = character.getObjectByProperty("uuid", middleId), end = character.getObjectByProperty("uuid", endId);
       const camera = editor.cameraController.camera, canvas = editor.renderer?.domElement;
       const degrees = limit.trim() ? Number(limit) : NaN;

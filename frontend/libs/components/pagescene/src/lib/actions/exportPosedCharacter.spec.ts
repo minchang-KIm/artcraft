@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { AnimationMixer, Bone, BoxGeometry, Float32BufferAttribute, Group, MeshBasicMaterial, Quaternion, Skeleton, SkinnedMesh, Uint16BufferAttribute } from "three";
+import { AnimationClip, AnimationMixer, Bone, BoxGeometry, Float32BufferAttribute, Group, MeshBasicMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Skeleton, SkinnedMesh, Uint16BufferAttribute } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { exportPosedCharacter } from "./exportPosedCharacter";
+import { CharacterAnimationManager } from "../engine/animation/CharacterAnimationManager";
+import type Editor from "../engine/editor";
 import { EASING_PRESETS } from "../engine/timeline/types";
 
 describe("posed GLB export", () => {
@@ -52,5 +54,31 @@ describe("posed GLB export", () => {
     expect(root.position.x).toBe(0);
     timeline.boneTracks[0].path[0].name = "changed";
     await expect(exportPosedCharacter(root, timeline)).rejects.toThrow("unbound");
+  });
+  it("exports bone keys over a clip while retaining other animated bones", async () => {
+    const root = new Group(); root.userData.isCharacter = true;
+    const keyed = new Bone(), other = new Bone(); keyed.name = "keyed"; other.name = "other";
+    const geometry = new BoxGeometry(), count = geometry.getAttribute("position").count;
+    geometry.setAttribute("skinIndex", new Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+    const weights = new Float32Array(count * 4); for (let i = 0; i < count; i++) weights[i * 4] = 1;
+    geometry.setAttribute("skinWeight", new Float32BufferAttribute(weights, 4));
+    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial()); root.add(keyed, other, mesh); mesh.bind(new Skeleton([keyed, other]));
+    root.animations = [new AnimationClip("motion", 2, [
+      new QuaternionKeyframeTrack("keyed.quaternion", [0, 2], [0, 0, 0, 1, 0, 0, 1, 0]),
+      new QuaternionKeyframeTrack("other.quaternion", [0, 2], [0, 0, 0, 1, 0, 0, 1, 0]),
+    ])];
+    const scene = new Scene(); scene.add(root);
+    const editor = { activeScene: { scene }, timelineController: { getPlayhead: () => 0, resolveClipDuration() {} } } as unknown as Editor;
+    editor.characterAnimationManager = new CharacterAnimationManager(editor);
+    const lane = { id: "lane", objectUuid: root.uuid, strip: { id: "strip", sourceMediaId: "", bakedClipIndex: 0, name: "motion", startTime: 0, duration: 2, loop: false } };
+    editor.characterAnimationManager.sync([lane]);
+    const timeline = { duration: 2, fps: 30, tracks: [], clipLanes: [lane], boneTracks: [{ objectUuid: root.uuid, path: [{ index: 0, name: "keyed", type: "Bone" }], keyframes: [
+      { id: "key", time: 0, easing: EASING_PRESETS.linear, rotation: [0, 0, 0, 1] as [number, number, number, number] },
+    ] }] };
+    const bytes = await exportPosedCharacter(root, timeline, editor);
+    const gltf = await new GLTFLoader().parseAsync(bytes, "");
+    const mixer = new AnimationMixer(gltf.scene); mixer.clipAction(gltf.animations[0]).play(); mixer.setTime(1);
+    expect(gltf.scene.getObjectByName("keyed")!.quaternion.clone().normalize().angleTo(new Quaternion())).toBeCloseTo(0, 4);
+    expect(gltf.scene.getObjectByName("other")!.quaternion.clone().normalize().angleTo(new Quaternion(0, 0, Math.SQRT1_2, Math.SQRT1_2))).toBeCloseTo(0, 4);
   });
 });

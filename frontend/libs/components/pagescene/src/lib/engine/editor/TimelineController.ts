@@ -258,7 +258,7 @@ export class TimelineController {
   addBoneRotationKeys(objectUuid: string, paths: BonePathPart[][]): void {
     const timeline = this.timeline;
     if (!timeline || this.isPlaying) throw new Error("Pause the timeline before keying a pose.");
-    if (timeline.clipLanes.some(lane => lane.objectUuid === objectUuid)) throw new Error("Remove this character's motion clips before keying a pose.");
+    this.editor.characterAnimationManager.assertReadyForCapture(timeline.clipLanes.filter(lane => lane.objectUuid === objectUuid));
     const root = this.editor.activeScene.scene.getObjectByProperty("uuid", objectUuid);
     if (!root || !root.userData.isCharacter || !paths.length) throw new Error("Select a character and at least one bone.");
     const identities = paths.map(path => JSON.stringify(path));
@@ -406,7 +406,6 @@ export class TimelineController {
   // the character's row (callers surface that to the user).
   addClipLane(objectUuid: string, strip: Omit<ClipStrip, "id">): string | null {
     if (!this.timeline) return null;
-    if (this.timeline.boneTracks?.some(track => track.objectUuid === objectUuid && track.keyframes.length)) return null;
     // Characters hold clips on a single row: snap the drop to the nearest free
     // slot so strips never overlap (see resolveFreeStart).
     const startTime = this.resolveFreeStart(
@@ -651,12 +650,18 @@ export class TimelineController {
     }
     // Pose characters from their skeletal clip lanes at the same playhead.
     this.editor.characterAnimationManager.evaluateAt(this.playhead);
+    this.applyBoneRotationsAt(this.playhead);
+  }
+
+  /** Bone keys override the clip's local rotation on keyed bones only. */
+  applyBoneRotationsAt(time: number): void {
+    if (!this.timeline) return;
     for (const track of this.timeline.boneTracks ?? []) {
       if (!track || typeof track.objectUuid !== "string") continue;
       const root = this.editor.activeScene.scene.getObjectByProperty("uuid", track.objectUuid);
-      if (!root || !root.userData.isCharacter || this.timeline.clipLanes.some(lane => lane.objectUuid === track.objectUuid)) continue;
+      if (!root || !root.userData.isCharacter) continue;
       const bone = resolveBonePath(root, track.path);
-      const rotation = sampleBoneRotation(track, this.playhead);
+      const rotation = sampleBoneRotation(track, time);
       if (bone && rotation) bone.quaternion.copy(rotation);
     }
   }

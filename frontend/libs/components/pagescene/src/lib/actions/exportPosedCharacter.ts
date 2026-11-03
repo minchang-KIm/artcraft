@@ -31,7 +31,6 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
   copy.uuid = character.uuid;
   const lanes = timeline?.clipLanes.filter((lane) => lane.objectUuid === character.uuid) ?? [];
   const boneTracks = timeline?.boneTracks?.filter((track) => track.objectUuid === character.uuid) ?? [];
-  if (lanes.length && boneTracks.length) throw new Error("A character cannot export motion clips and bone keys together.");
   // Resolve against the clone before the skin meshes are reparented below.
   const keyedBones = boneTracks.map((track) => {
     const bone = resolveBonePath(copy, track.path);
@@ -108,7 +107,7 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
         new VectorKeyframeTrack(`${copy.uuid}.scale`, sorted, scales),
       ] : [];
       if (keyedBones.length * sorted.length > 1000000) throw new Error("Bone animation is too large to export.");
-      for (const { track: boneTrack, bone } of keyedBones) {
+      for (const { track: boneTrack, bone } of mixer ? [] : keyedBones) {
         const values: number[] = [];
         let previous: Quaternion | undefined;
         for (const time of sorted) {
@@ -127,6 +126,11 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
         const values = bones.map(() => ({ positions: [] as number[], rotations: [] as number[], scales: [] as number[], previous: undefined as Quaternion | undefined }));
         for (const time of sorted) {
           mixer.evaluateAt(time);
+          for (const { track: boneTrack, bone } of keyedBones) {
+            const rotation = sampleBoneRotation(boneTrack, time);
+            if (!rotation) throw new Error("Invalid bone rotation track.");
+            bone.quaternion.copy(rotation);
+          }
           bones.forEach((bone, i) => {
             const value = values[i];
             value.positions.push(...bone.position.toArray()); value.scales.push(...bone.scale.toArray());

@@ -194,6 +194,9 @@ export class CharacterAnimationManager {
       if (!posed.has(uuid)) this.resetToRestPose(uuid);
     }
     for (const mixer of this.mixers.values()) mixer.update(0);
+    // Async lane loads also call evaluateAt directly. Reapply timeline keys
+    // after every mixer update, including those completions.
+    this.editor.timelineController.applyBoneRotationsAt?.(playhead);
   }
 
   // Reassess lanes/mixers whose scene object CHANGED — appeared (undo
