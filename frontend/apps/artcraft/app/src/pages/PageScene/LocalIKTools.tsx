@@ -60,6 +60,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
   const [limit, setLimit] = useState("180");
   const [status, setStatus] = useState("");
   const [handling, setHandling] = useState(false);
+  const [restoring, setRestoring] = useState(false);
   const [keys, setKeys] = useState<Array<{ id: string; time: number; bone: string }>>([]);
   const handleSession = useRef<HandleSession | null>(null);
 
@@ -211,6 +212,19 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
+  const keyFullPose = () => {
+    const editor = getActiveEditor(), character = selectedCharacter();
+    try {
+      if (!editor || !character || hasPosePreview(editor)) throw new Error("Select a character and finish the active pose preview first.");
+      const paths: PathPart[][] = [];
+      character.traverse(node => { if (node.type === "Bone") paths.push(pathTo(character, node)); });
+      if (!paths.length) throw new Error("The selected character has no bones.");
+      editor.timelineController.create();
+      editor.timelineController.recordEdit("Key all bone rotations", () => editor.timelineController.addBoneRotationKeys(character.uuid, paths));
+      setStatus(`All bone rotations keyed at ${editor.timelineController.getPlayhead().toFixed(2)} seconds. Save the local scene to retain it.`);
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
   const removeKey = (id: string) => {
     const editor = getActiveEditor();
     try {
@@ -218,6 +232,47 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
       editor.timelineController.recordEdit("Delete bone key", () => editor.timelineController.deleteBoneRotationKey(id));
       setStatus("Bone key deleted. Save the local scene to retain this change.");
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
+  const restoreRestPose = async () => {
+    const editor = getActiveEditor(), character = selectedCharacter();
+    if (!editor || !character || restoring || hasPosePreview(editor) || editor.timelineController.getIsPlaying()) { setStatus("Select a character, pause playback, and finish the active pose preview first."); return; }
+    const mediaId = character.userData.media_id;
+    if (typeof mediaId !== "string" || !mediaId.startsWith("local-glb:")) { setStatus("Rest pose requires a local character GLB."); return; }
+    const before: Array<{ path: PathPart[]; position: number[]; rotation: number[]; scale: number[] }> = [];
+    character.traverse(node => { if (node.type === "Bone") before.push({ path: pathTo(character, node), position: node.position.toArray(), rotation: node.quaternion.toArray(), scale: node.scale.toArray() }); });
+    if (!before.length) { setStatus("The selected character has no bones."); return; }
+    const fingerprint = JSON.stringify(before), timeline = JSON.stringify(editor.timelineController.getTimeline()), time = editor.timelineController.getPlayhead();
+    const resolve = (root: Object3D, path: PathPart[]) => {
+      let node: Object3D | undefined = root;
+      for (const part of path) { node = node?.children[part.index]; if (!node || node.name !== part.name || node.type !== part.type) return undefined; }
+      return node?.type === "Bone" ? node : undefined;
+    };
+    setRestoring(true);
+    try {
+      const glb = await editor.activeScene.loadRawGlb(mediaId);
+      if (!glb || getActiveEditor() !== editor || !editor.isLive || selectedCharacter() !== character || character.userData.media_id !== mediaId || hasPosePreview(editor) || editor.timelineController.getIsPlaying() || editor.timelineController.getPlayhead() !== time || JSON.stringify(editor.timelineController.getTimeline()) !== timeline) throw new Error("The character or timeline changed while loading its rest pose.");
+      const current = before.map(entry => resolve(character, entry.path));
+      let currentCount = 0; character.traverse(node => { if (node.type === "Bone") currentCount++; });
+      if (currentCount !== before.length || current.some(node => !node) || JSON.stringify(current.map((node, index) => ({ path: before[index].path, position: node!.position.toArray(), rotation: node!.quaternion.toArray(), scale: node!.scale.toArray() }))) !== fingerprint) throw new Error("The pose changed while loading its rest pose.");
+      const source = [glb.scene, ...glb.scene.children].find(candidate => {
+        let count = 0; candidate.traverse(node => { if (node.type === "Bone") count++; });
+        return count === before.length && before.every(entry => resolve(candidate, entry.path));
+      });
+      if (!source) throw new Error("The character skeleton no longer matches its local GLB.");
+      const after = before.map(entry => { const node = resolve(source, entry.path)!; return { path: entry.path, position: node.position.toArray(), rotation: node.quaternion.toArray(), scale: node.scale.toArray() }; });
+      const write = (values: typeof before) => {
+        if (editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) !== character) throw new Error("The character is no longer available.");
+        const nodes = values.map(entry => resolve(character, entry.path));
+        if (nodes.some(node => !node)) throw new Error("The character skeleton no longer matches.");
+        values.forEach((entry, index) => { nodes[index]!.position.fromArray(entry.position); nodes[index]!.quaternion.fromArray(entry.rotation); nodes[index]!.scale.fromArray(entry.scale); });
+        character.updateMatrixWorld(true);
+      };
+      write(after);
+      if (JSON.stringify(before) !== JSON.stringify(after)) editor.history.record({ label: "Restore rest pose", apply: () => write(after), revert: () => write(before) });
+      setStatus("Rest pose restored. Key it at the playhead to retain it in an animated timeline, then save the scene.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+    finally { setRestoring(false); }
   };
 
   const options = <><option value="">Select a bone</option>{bones.map(bone => <option key={bone.id} value={bone.id}>{bone.name} ({bone.id.slice(0, 6)})</option>)}</>;
@@ -235,6 +290,8 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     <button type="button" disabled={!upperId || !middleId || !endId || handling} onClick={apply}>Apply IK target</button>
     {!handling ? <button type="button" disabled={!upperId || !middleId || !endId} onClick={startHandle}>Start IK handle</button> : <><button type="button" onClick={() => stopHandle(true)}>Apply IK handle</button><button type="button" onClick={() => stopHandle(false)}>Cancel IK handle</button></>}
     <button type="button" disabled={!upperId || !middleId || handling} onClick={keyPose}>Key IK pose at playhead</button>
+    <button type="button" disabled={!bones.length || handling || restoring} onClick={keyFullPose}>Key all bone rotations at playhead</button>
+    <button type="button" disabled={!bones.length || handling || restoring} onClick={() => void restoreRestPose()}>Restore local rest pose</button>
     {keys.length > 0 && <ul aria-label="Bone rotation keys">{keys.map(key => <li key={key.id}><button type="button" disabled={handling} onClick={() => { const editor = getActiveEditor(); if (editor && !hasPosePreview(editor)) { editor.timelineController.pause(); editor.timelineController.seekTo(key.time); } }}>{key.bone} · {key.time.toFixed(2)}s</button> <button type="button" disabled={handling} aria-label={`Delete ${key.bone} key at ${key.time.toFixed(2)} seconds`} onClick={() => removeKey(key.id)}>Delete</button></li>)}</ul>}
     {status && <p role="status">{status}</p>}
   </details>;
