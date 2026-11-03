@@ -17,6 +17,14 @@ const MAX_BYTES = 50 * 1024 * 1024;
 const IDENTITY_COUNT = 45;
 const neutralIdentity = () => Array<string>(IDENTITY_COUNT).fill("0");
 const validIdentity = (value: unknown): value is number[] => Array.isArray(value) && value.length === IDENTITY_COUNT && value.every((v) => typeof v === "number" && Number.isFinite(v) && v >= -3 && v <= 3);
+function readHeightFit(provenance: unknown, requested: number | null): { identity: number[]; message: string } | null {
+  if (requested === null) return null;
+  if (!provenance || typeof provenance !== "object") throw new Error("MHR worker did not return height measurements.");
+  const value = provenance as { identity?: unknown; height_fit?: { target_cm?: unknown; measured_cm?: unknown; residual_cm?: unknown; tolerance_cm?: unknown; converged?: unknown } };
+  const fit = value.height_fit;
+  if (!validIdentity(value.identity) || !fit || typeof fit.target_cm !== "number" || !Number.isFinite(fit.target_cm) || Math.abs(fit.target_cm - requested) > 1e-6 || typeof fit.measured_cm !== "number" || !Number.isFinite(fit.measured_cm) || fit.measured_cm <= 0 || typeof fit.residual_cm !== "number" || !Number.isFinite(fit.residual_cm) || Math.abs(fit.measured_cm - requested - fit.residual_cm) > 1e-4 || typeof fit.tolerance_cm !== "number" || !Number.isFinite(fit.tolerance_cm) || fit.tolerance_cm <= 0 || fit.tolerance_cm > 5 || typeof fit.converged !== "boolean" || fit.converged !== (Math.abs(fit.residual_cm) <= fit.tolerance_cm)) throw new Error("MHR worker returned invalid height measurements.");
+  return { identity: value.identity, message: `Neutral mesh height ${fit.measured_cm.toFixed(2)} cm; target ${requested.toFixed(2)} cm; residual ${fit.residual_cm.toFixed(2)} cm. ${fit.converged ? "Target reached." : "Target not reached by the local search."}` };
+}
 
 async function validateSceneAssets(scene: SceneDocument): Promise<SceneAudioClip[]> {
   const snapshot = scene.data as { scene?: Array<{ media_file_token?: string }>; timeline?: { clipLanes?: Array<{ strip?: { sourceMediaId?: string } }> } };
@@ -42,6 +50,7 @@ export function LocalSceneTools() {
   const captureJob = useRef<{ id: string; cancelled: boolean; acceptingCancel: boolean } | null>(null);
   const [identityDraft, setIdentityDraft] = useState<string[]>(neutralIdentity);
   const [identityIndex, setIdentityIndex] = useState(0);
+  const [heightTarget, setHeightTarget] = useState("");
   const [includeTimeline, setIncludeTimeline] = useState(false);
   const [captureStart, setCaptureStart] = useState("");
   const [captureEnd, setCaptureEnd] = useState("");
@@ -163,16 +172,21 @@ export function LocalSceneTools() {
   });
   const identity = identityDraft.map((value) => value.trim() ? Number(value) : NaN);
   const identityIsValid = validIdentity(identity);
+  const targetHeightCm = heightTarget.trim() ? Number(heightTarget) : null;
+  const heightIsValid = targetHeightCm === null || (Number.isFinite(targetHeightCm) && targetHeightCm >= 50 && targetHeightCm <= 250);
   const generate = () => run(async () => {
     const editor = getActiveEditor();
     if (!editor?.sceneManager) throw new Error("3D stage is not ready.");
     if (!identityIsValid) throw new Error("Every MHR identity coefficient must be between -3 and 3.");
+    if (!heightIsValid) throw new Error("Target height must be between 50 and 250 cm.");
     setMessage("Generating a local MHR character…");
-    const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity });
+    const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity, targetHeightCm });
+    const fit = readHeightFit(result.provenance, targetHeightCm);
     const objectId = await addCharacter(editor, { media_id: result.assetId, name: "MHR character", type: AssetType.CHARACTER, version: 2 });
     if (!objectId) throw new Error("The generated character could not be added to the scene.");
     generatedAssets.current = { ...generatedAssets.current, [result.assetId]: result.provenance };
-    return "MHR character added. Save the local scene to retain its placement.";
+    if (fit) setIdentityDraft(fit.identity.map(String));
+    return `MHR character added. Save the local scene to retain its placement.${fit ? ` ${fit.message}` : ""}`;
   });
   const applyToSelected = () => run(async () => {
     const editor = getActiveEditor();
@@ -184,14 +198,17 @@ export function LocalSceneTools() {
     const originalIdentity = provenance && typeof provenance === "object" ? (provenance as { identity?: unknown }).identity : undefined;
     if (typeof before !== "string" || !validIdentity(originalIdentity)) throw new Error("The selected character has no valid MHR generation record.");
     if (!identityIsValid) throw new Error("Every MHR identity coefficient must be between -3 and 3.");
+    if (!heightIsValid) throw new Error("Target height must be between 50 and 250 cm.");
     editor.entranceAnimator.cancel(object);
     const fingerprint = mhrCharacterFingerprint(object);
     setMessage("Generating a local MHR character…");
-    const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity });
+    const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity, targetHeightCm });
+    const fit = readHeightFit(result.provenance, targetHeightCm);
     generatedAssets.current = { ...generatedAssets.current, [result.assetId]: result.provenance };
     if (getActiveEditor() !== editor) throw new Error("The scene changed before the result was applied.");
     await replaceMhrCharacter(editor, object.uuid, before, result.assetId, fingerprint);
-    return "MHR shape applied. Save the local scene to retain the change.";
+    if (fit) setIdentityDraft(fit.identity.map(String));
+    return `MHR shape applied. Save the local scene to retain the change.${fit ? ` ${fit.message}` : ""}`;
   });
   const loadSelectedIdentity = () => run(async () => {
     const selected = getActiveEditor()?.sceneManager?.selected_objects;
@@ -395,10 +412,12 @@ export function LocalSceneTools() {
       <label className="cursor-pointer rounded px-2 py-1">Add local motion GLB<input aria-label="Add local motion GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void addMotion(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label>MHR coefficient <select aria-label="MHR coefficient" className="text-black" value={identityIndex} disabled={busy} onChange={(event) => setIdentityIndex(Number(event.target.value))}>{Array.from({ length: IDENTITY_COUNT }, (_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
       <label>Coefficient value <input aria-label="MHR coefficient value" type="number" min={-3} max={3} step={0.1} className="w-16 text-black" value={identityDraft[identityIndex]} disabled={busy} onChange={(event) => { const value = event.currentTarget.value; setIdentityDraft((previous) => previous.map((item, index) => index === identityIndex ? value : item)); }} /></label>
+      <label>Target neutral height (cm, optional) <input aria-label="MHR target height cm" type="number" min={50} max={250} step={0.1} className="w-20 text-black" value={heightTarget} disabled={busy} onChange={(event) => setHeightTarget(event.currentTarget.value)} /></label>
+      <p className="max-w-72 text-xs">Height is the neutral mesh extent, excluding scene scale. Fitting is approximate and does not guarantee anatomy.</p>
       <button type="button" disabled={busy} onClick={() => void loadSelectedIdentity()}>Load selected MHR coefficients</button>
       <button type="button" disabled={busy} onClick={() => setIdentityDraft(neutralIdentity())}>Reset MHR coefficients</button>
-      <button type="button" disabled={busy || !identityIsValid} onClick={() => void generate()}>Generate local MHR character</button>
-      <button type="button" disabled={busy || !identityIsValid} onClick={() => void applyToSelected()}>Apply MHR shape to selected</button>
+      <button type="button" disabled={busy || !identityIsValid || !heightIsValid} onClick={() => void generate()}>Generate local MHR character</button>
+      <button type="button" disabled={busy || !identityIsValid || !heightIsValid} onClick={() => void applyToSelected()}>Apply MHR shape to selected</button>
       <label><input type="checkbox" checked={includeTimeline} disabled={busy} onChange={(event) => setIncludeTimeline(event.target.checked)} /> Include character timeline</label>
       <button type="button" disabled={busy} onClick={() => void exportSelected()}>Export selected GLB</button>
       <label>Scene name <input aria-label="Scene name" className="text-black" maxLength={200} value={sceneName} disabled={busy} onChange={(event) => setSceneName(event.target.value)} /></label>

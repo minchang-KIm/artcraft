@@ -7,9 +7,12 @@ use tauri::State;
 
 /// Run only the configured local worker; no executable or path comes from the UI.
 #[tauri::command]
-pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, identity: Vec<f64>) -> Result<serde_json::Value, String> {
+pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, identity: Vec<f64>, target_height_cm: Option<f64>) -> Result<serde_json::Value, String> {
   if identity.len() != 45 || identity.iter().any(|v| !v.is_finite() || !(-3.0..=3.0).contains(v)) {
     return Err("MHR identity must contain 45 finite values between -3 and 3".into());
+  }
+  if target_height_cm.is_some_and(|height| !height.is_finite() || !(50.0..=250.0).contains(&height)) {
+    return Err("Target height must be between 50 and 250 cm".into());
   }
   let python = configured(&app_data_root, "TOTAL_RECALL_MHR_PYTHON")?;
   let worker = configured(&app_data_root, "TOTAL_RECALL_MHR_WORKER")?;
@@ -24,9 +27,11 @@ pub async fn total_recall_mhr_generate(app_data_root: State<'_, AppDataRoot>, id
     std::fs::write(&identity_path, serde_json::to_vec(&identity).map_err(|e| e.to_string())?).map_err(|e| e.to_string())?;
     let log = std::fs::File::create(&log_path).map_err(|e| e.to_string())?;
     let stderr = log.try_clone().map_err(|e| e.to_string())?;
-    let mut child = Command::new(python).arg(worker).arg("--model").arg(model).arg("--mhr-root").arg(root)
-      .arg("--identity").arg(identity_path).arg("--output").arg(&output_path)
-      .stdout(Stdio::from(log)).stderr(Stdio::from(stderr)).spawn().map_err(|e| format!("MHR worker could not start: {e}"))?;
+    let mut command = Command::new(python);
+    command.arg(worker).arg("--model").arg(model).arg("--mhr-root").arg(root)
+      .arg("--identity").arg(identity_path).arg("--output").arg(&output_path);
+    if let Some(height) = target_height_cm { command.arg("--target-height-cm").arg(height.to_string()); }
+    let mut child = command.stdout(Stdio::from(log)).stderr(Stdio::from(stderr)).spawn().map_err(|e| format!("MHR worker could not start: {e}"))?;
     let deadline = Instant::now() + Duration::from_secs(240);
     let status = loop {
       match child.try_wait() {
