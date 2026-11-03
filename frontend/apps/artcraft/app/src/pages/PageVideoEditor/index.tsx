@@ -409,6 +409,25 @@ export function PageVideoEditor() {
     finally { if (resolved && !retained) EditorCore.getInstance().adapters.mediaSource.releaseResolved?.(resolved); setImporting(false); }
   };
 
+  const alignSelectedAudioToDialogue = () => {
+    try {
+      const editor = EditorCore.getInstance(), scene = editor.scenes.getActiveScene();
+      const selected = editor.selection.getSelectedElements();
+      if (selected.length !== 1) throw new Error("Select one linked audio clip.");
+      const ref = selected[0], track = scene.tracks.audio.find(item => item.id === ref.trackId);
+      const audio = track?.elements.find(item => item.id === ref.elementId);
+      const sourceId = audio?.legacyVoice?.dialogueElementId ?? audio?.localSpeechGeneration?.sourceDialogueElementId;
+      if (!track || !audio || !sourceId) throw new Error("Select one linked audio clip.");
+      const matches = scene.tracks.overlay.flatMap(item => item.type === "text" ? item.elements : []).filter(item => item.id === sourceId && item.legacyDialogue);
+      if (matches.length !== 1) throw new Error("Linked dialogue is unavailable or ambiguous.");
+      const target = matches[0].startTime;
+      if (target < 0 || !Number.isFinite(target) || !Number.isFinite(audio.duration) || audio.duration <= 0) throw new Error("Invalid clip timing.");
+      if (track.elements.some(item => item.id !== audio.id && target < item.startTime + item.duration && item.startTime < target + audio.duration)) throw new Error("Cannot align: another clip occupies this audio track at that time.");
+      if (target !== audio.startTime) editor.timeline.moveElements({ moves: [{ sourceTrackId: track.id, targetTrackId: track.id, elementId: audio.id, newStartTime: target }] });
+      setImportStatus("Audio aligned to dialogue start.");
+    } catch (error) { setImportStatus(`Error: ${error instanceof Error ? error.message : String(error)}`); }
+  };
+
   const saveRenderSnapshot = async () => {
     if (importing) return;
     setImporting(true);
@@ -519,6 +538,7 @@ export function PageVideoEditor() {
           <p className="break-words">{importedLink.sourceText ?? "No source text"}</p>
           {importedLink.textChanged && <p>Dialogue text differs from this audio's source text.</p>}
           {importedLink.timingChanged && <p>Dialogue and audio start at different times.</p>}
+          {importedLink.kind === "voice" && importedLink.timingChanged && importedLink.links.length === 1 && <button type="button" disabled={importing} onClick={alignSelectedAudioToDialogue}>Align audio to dialogue start</button>}
           {importedLink.kind === "dialogue" && <button type="button" disabled={importing || !importedLink.sourceText?.trim() || importedLink.sourceText.length > 500} onClick={() => { setMockDialogue(importedLink.sourceText!); EditorCore.getInstance().playback.seek({ time: importedLink.startTime }); }}>Use selected dialogue for speech</button>}
           {importedLink.kind === "dialogue" && (importedLink.sourceText?.length ?? 0) > 500 && <p>Dialogue exceeds the 500-character limit.</p>}
           {importedLink.links.length === 0 ? <p>{importedLink.kind === "voice" ? "Linked dialogue is unavailable." : "No linked audio."}</p> : importedLink.links.map((link, index) => <button key={link.ref.elementId} type="button" className="block underline" onClick={() => { const editor = EditorCore.getInstance(); editor.selection.setSelectedElements({ elements: [link.ref] }); editor.playback.seek({ time: link.startTime }); }}>{importedLink.kind === "voice" ? "Select linked dialogue" : `Select linked audio ${index + 1}`}{link.hidden ? " (hidden track)" : ""}{link.textChanged ? " (text changed)" : ""}{link.timingChanged ? " (timing changed)" : ""}</button>)}
