@@ -8,6 +8,7 @@ export async function addCharacter(
   editor: Editor,
   item: MediaItem,
   position?: THREE.Vector3,
+  mhrProvenance?: unknown,
 ): Promise<string | undefined> {
   const obj = await editor.sceneManager?.create(
     item.media_id,
@@ -17,6 +18,7 @@ export async function addCharacter(
   if (!obj) return undefined;
 
   obj.userData.isCharacter = true;
+  if (mhrProvenance !== undefined) obj.userData.totalRecallMhr = { assetId: item.media_id, provenance: mhrProvenance };
 
   // Animate it in (see addObject).
   editor.entranceAnimator.play(obj);

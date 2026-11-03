@@ -12,11 +12,19 @@ import { hasPosePreview } from "./pose-control-lease";
 import { useTabStore } from "~/pages/Stores/TabState";
 import { addCharacter, AssetType, getActiveEditor, usePageSceneStore, SceneResetEvent, TimelinePlayheadEvent, getSceneGenerationMetaData, mhrCharacterFingerprint, replaceMhrCharacter, exportPosedCharacter, addClipToCharacter, validateBoneAnimation } from "@storyteller/ui-pagescene";
 
-type SceneDocument = { id: string; revision: number; kind: "scene"; name: string; updatedAt: number; data: unknown; generatedAssets?: Record<string, unknown>; mhrIdentityDraft?: number[]; sceneAudio?: SceneAudioClip[]; recoveredFrom?: RecoveryReference };
+type SceneDocument = { id: string; revision: number; kind: "scene"; name: string; updatedAt: number; data: unknown; generatedAssets?: Record<string, unknown>; mhrIdentityDraft?: number[]; mhrProvenanceVersion?: number; sceneAudio?: SceneAudioClip[]; recoveredFrom?: RecoveryReference };
 const MAX_BYTES = 50 * 1024 * 1024;
 const IDENTITY_COUNT = 45;
 const neutralIdentity = () => Array<string>(IDENTITY_COUNT).fill("0");
 const validIdentity = (value: unknown): value is number[] => Array.isArray(value) && value.length === IDENTITY_COUNT && value.every((v) => typeof v === "number" && Number.isFinite(v) && v >= -3 && v <= 3);
+function characterProvenance(object: { userData: Record<string, unknown> }, legacy: Record<string, unknown>, allowLegacy: boolean): unknown {
+  const id = object.userData.media_id, binding = object.userData.totalRecallMhr;
+  if (binding !== undefined) {
+    if (!binding || typeof binding !== "object" || (binding as { assetId?: unknown }).assetId !== id) throw new Error("The selected character has invalid MHR provenance.");
+    return (binding as { provenance?: unknown }).provenance;
+  }
+  return allowLegacy && typeof id === "string" ? legacy[id] : undefined;
+}
 function readMeasurements(provenance: unknown, height: number | null, torso: number | null): { identity: number[]; message: string } | null {
   if (height === null && torso === null) return null;
   if (!provenance || typeof provenance !== "object") throw new Error("MHR worker did not return measurements.");
@@ -72,6 +80,7 @@ export function LocalSceneTools() {
   const editorInitialized = usePageSceneStore(state => state.is3DEditorInitialized);
   const current = useRef<{ id: string; revision: number } | undefined>(undefined);
   const generatedAssets = useRef<Record<string, unknown>>({});
+  const allowLegacyMhr = useRef(false);
   const recoveredFrom = useRef<RecoveryReference | undefined>(undefined);
   const run = async (work: () => Promise<string>) => {
     if (busyRef.current) return;
@@ -93,6 +102,7 @@ export function LocalSceneTools() {
       audioPreview.current?.setClips([]);
       current.current = undefined;
       generatedAssets.current = {};
+      allowLegacyMhr.current = false;
       recoveredFrom.current = undefined;
       setSceneAudio([]);
       setIdentityDraft(neutralIdentity());
@@ -192,9 +202,9 @@ export function LocalSceneTools() {
     setMessage("Generating a local MHR character…");
     const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity, targetHeightCm, targetTorsoCm });
     const fit = readMeasurements(result.provenance, targetHeightCm, targetTorsoCm);
-    const objectId = await addCharacter(editor, { media_id: result.assetId, name: "MHR character", type: AssetType.CHARACTER, version: 2 });
+    const objectId = await addCharacter(editor, { media_id: result.assetId, name: "MHR character", type: AssetType.CHARACTER, version: 2 }, undefined, result.provenance);
     if (!objectId) throw new Error("The generated character could not be added to the scene.");
-    generatedAssets.current = { ...generatedAssets.current, [result.assetId]: result.provenance };
+    generatedAssets.current = { ...generatedAssets.current, [result.assetId]: generatedAssets.current[result.assetId] ?? result.provenance };
     if (fit) setIdentityDraft(fit.identity.map(String));
     return `MHR character added. Save the local scene to retain its placement.${fit ? ` ${fit.message}` : ""}`;
   });
@@ -204,7 +214,7 @@ export function LocalSceneTools() {
     if (!editor || !selected || selected.length !== 1) throw new Error("Select one MHR character in the scene.");
     const object = selected[0];
     const before: unknown = object.userData.media_id;
-    const provenance = typeof before === "string" ? generatedAssets.current[before] : undefined;
+    const provenance = characterProvenance(object, generatedAssets.current, allowLegacyMhr.current);
     const originalIdentity = provenance && typeof provenance === "object" ? (provenance as { identity?: unknown }).identity : undefined;
     if (typeof before !== "string" || !validIdentity(originalIdentity)) throw new Error("The selected character has no valid MHR generation record.");
     if (!identityIsValid) throw new Error("Every MHR identity coefficient must be between -3 and 3.");
@@ -215,17 +225,16 @@ export function LocalSceneTools() {
     setMessage("Generating a local MHR character…");
     const result = await invoke<{ assetId: string; provenance: unknown }>("total_recall_mhr_generate", { identity, targetHeightCm, targetTorsoCm });
     const fit = readMeasurements(result.provenance, targetHeightCm, targetTorsoCm);
-    generatedAssets.current = { ...generatedAssets.current, [result.assetId]: result.provenance };
     if (getActiveEditor() !== editor) throw new Error("The scene changed before the result was applied.");
-    await replaceMhrCharacter(editor, object.uuid, before, result.assetId, fingerprint);
+    await replaceMhrCharacter(editor, object.uuid, before, result.assetId, fingerprint, result.provenance);
+    generatedAssets.current = { ...generatedAssets.current, [result.assetId]: generatedAssets.current[result.assetId] ?? result.provenance };
     if (fit) setIdentityDraft(fit.identity.map(String));
     return `MHR shape applied. Save the local scene to retain the change.${fit ? ` ${fit.message}` : ""}`;
   });
   const loadSelectedIdentity = () => run(async () => {
     const selected = getActiveEditor()?.sceneManager?.selected_objects;
     if (!selected || selected.length !== 1) throw new Error("Select one MHR character in the scene.");
-    const id: unknown = selected[0].userData.media_id;
-    const provenance = typeof id === "string" ? generatedAssets.current[id] : undefined;
+    const provenance = characterProvenance(selected[0], generatedAssets.current, allowLegacyMhr.current);
     const values = provenance && typeof provenance === "object" ? (provenance as { identity?: unknown }).identity : undefined;
     if (!validIdentity(values)) throw new Error("The selected character has no valid MHR generation record.");
     const record = provenance as { height_fit?: { target_cm?: unknown }; torso_fit?: { target_cm?: unknown } };
@@ -370,12 +379,20 @@ export function LocalSceneTools() {
     // The scene snapshot contains Three.js objects; serialize them using the
     // existing scene format before passing the document across Tauri IPC.
     const data = JSON.parse(JSON.stringify(editor.save_manager.getSceneJson({ sceneGenerationMetadata: getSceneGenerationMetaData(editor) })));
+    // Older scenes tracked MHR requests only by asset. Materialize those
+    // bindings into this saved snapshot before switching to per-object data.
+    if (allowLegacyMhr.current && Array.isArray(data.scene)) for (const entry of data.scene) {
+      const userData = entry?.user_data, id = entry?.media_file_token;
+      if (userData?.isCharacter && userData.totalRecallMhr === undefined && typeof id === "string" && generatedAssets.current[id] !== undefined) {
+        userData.totalRecallMhr = { assetId: id, provenance: generatedAssets.current[id] };
+      }
+    }
     const active = copy ? undefined : current.current;
     const id = active?.id ?? `scene:${crypto.randomUUID()}`;
     const name = sceneName.trim();
     if (!name) throw new Error("Enter a scene name.");
     if (!identityIsValid) throw new Error("Every MHR identity coefficient must be between -3 and 3.");
-    const document = { id, kind: "scene", name, updatedAt: Date.now(), data, generatedAssets: generatedAssets.current, mhrIdentityDraft: identity, sceneAudio, ...(recoveredFrom.current ? { recoveredFrom: recoveredFrom.current } : {}) };
+    const document = { id, kind: "scene", name, updatedAt: Date.now(), data, generatedAssets: generatedAssets.current, mhrIdentityDraft: identity, mhrProvenanceVersion: 1, sceneAudio, ...(recoveredFrom.current ? { recoveredFrom: recoveredFrom.current } : {}) };
     const saved = active
       ? await invoke<SceneDocument>("total_recall_project_save", { id, expectedRevision: active.revision, document })
       : await invoke<SceneDocument>("total_recall_project_create", { id, document });
@@ -404,6 +421,7 @@ export function LocalSceneTools() {
     if (!loaded.applied) throw new Error("The local scene could not be loaded.");
     current.current = { id: latest.id, revision: latest.revision };
     generatedAssets.current = latest.generatedAssets ?? {};
+    allowLegacyMhr.current = latest.mhrProvenanceVersion === undefined;
     recoveredFrom.current = latest.recoveredFrom;
     setSceneAudio(savedAudio);
     const provenance = Object.values(generatedAssets.current);

@@ -280,6 +280,7 @@ export class SceneManager implements SceneManagerAPI {
       // Preserve character stuff on pasted object
       if (wasCharacter) {
         obj.userData.isCharacter = true;
+        if (userdata.totalRecallMhr !== undefined) obj.userData.totalRecallMhr = JSON.parse(JSON.stringify(userdata.totalRecallMhr));
       }
 
       this.mouse_controls.selectObject(obj);
