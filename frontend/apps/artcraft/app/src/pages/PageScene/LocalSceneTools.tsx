@@ -97,6 +97,8 @@ export function LocalSceneTools() {
       setSceneAudio([]);
       setIdentityDraft(neutralIdentity());
       setIdentityIndex(0);
+      setHeightTarget("");
+      setTorsoTarget("");
     });
   }, [editorInitialized]);
   useEffect(() => {
@@ -226,9 +228,20 @@ export function LocalSceneTools() {
     const provenance = typeof id === "string" ? generatedAssets.current[id] : undefined;
     const values = provenance && typeof provenance === "object" ? (provenance as { identity?: unknown }).identity : undefined;
     if (!validIdentity(values)) throw new Error("The selected character has no valid MHR generation record.");
+    const record = provenance as { height_fit?: { target_cm?: unknown }; torso_fit?: { target_cm?: unknown } };
+    const storedTarget = (metric: { target_cm?: unknown } | undefined, min: number, max: number): number | null => {
+      if (metric === undefined) return null;
+      const target = metric?.target_cm;
+      if (typeof target !== "number" || !Number.isFinite(target) || target < min || target > max) throw new Error("The selected character has invalid measurement provenance.");
+      return target;
+    };
+    const height = storedTarget(record.height_fit, 50, 250), torso = storedTarget(record.torso_fit, 30, 200);
+    const fit = readMeasurements(provenance, height, torso);
     setIdentityDraft(values.map(String));
     setIdentityIndex(0);
-    return "Selected MHR coefficients loaded.";
+    setHeightTarget(height === null ? "" : String(height));
+    setTorsoTarget(torso === null ? "" : String(torso));
+    return `Selected MHR coefficients loaded.${fit ? ` Saved neutral measurements: ${fit.message} Measurements describe the saved asset, not unsaved coefficient edits.` : " No saved measurement targets."}`;
   });
   const exportSelected = () => run(async () => {
     const selected = getActiveEditor()?.sceneManager?.selected_objects;
