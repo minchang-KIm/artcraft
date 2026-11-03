@@ -73,7 +73,9 @@ type ImportedLinkInfo = {
   characterId: string | null;
   sourceText: string | null;
   startTime: ReturnType<typeof mediaTimeFromSeconds>;
-  links: Array<{ ref: ElementRef; startTime: ReturnType<typeof mediaTimeFromSeconds>; hidden: boolean }>;
+  textChanged?: boolean;
+  timingChanged?: boolean;
+  links: Array<{ ref: ElementRef; startTime: ReturnType<typeof mediaTimeFromSeconds>; hidden: boolean; textChanged?: boolean; timingChanged?: boolean }>;
 };
 
 export function PageVideoEditor() {
@@ -160,10 +162,15 @@ export function PageVideoEditor() {
       if (voice?.legacyVoice || voice?.localSpeechGeneration?.sourceDialogueElementId) {
         const data = voice.legacyVoice ?? { dialogueElementId: voice.localSpeechGeneration!.sourceDialogueElementId, sceneId: null, characterId: null, sourceText: voice.localSpeechGeneration!.text };
         const links: ImportedLinkInfo["links"] = [];
+        let textChanged = false, timingChanged = false;
         for (const track of scene.tracks.overlay) if (track.type === "text") for (const element of track.elements) {
-          if (element.id === data.dialogueElementId && element.legacyDialogue) links.push({ ref: { trackId: track.id, elementId: element.id }, startTime: element.startTime, hidden: track.hidden || !!element.hidden });
+          if (element.id === data.dialogueElementId && element.legacyDialogue) {
+            links.push({ ref: { trackId: track.id, elementId: element.id }, startTime: element.startTime, hidden: track.hidden || !!element.hidden });
+            textChanged = typeof data.sourceText === "string" && element.params.content !== data.sourceText;
+            timingChanged = element.startTime !== voice.startTime;
+          }
         }
-        setImportedLink({ kind: "voice", elementId: voice.id, sceneId: data.sceneId, characterId: data.characterId, sourceText: data.sourceText, startTime: voice.startTime, links });
+        setImportedLink({ kind: "voice", elementId: voice.id, sceneId: data.sceneId, characterId: data.characterId, sourceText: data.sourceText, startTime: voice.startTime, textChanged, timingChanged, links });
         return;
       }
       const track = scene.tracks.overlay.find(track => track.id === ref.trackId);
@@ -171,7 +178,10 @@ export function PageVideoEditor() {
       if (!dialogue?.legacyDialogue) { setImportedLink(null); return; }
       const links: ImportedLinkInfo["links"] = [];
       for (const audio of scene.tracks.audio) for (const element of audio.elements) {
-        if (element.legacyVoice?.dialogueElementId === dialogue.id || element.localSpeechGeneration?.sourceDialogueElementId === dialogue.id) links.push({ ref: { trackId: audio.id, elementId: element.id }, startTime: element.startTime, hidden: false });
+        if (element.legacyVoice?.dialogueElementId === dialogue.id || element.localSpeechGeneration?.sourceDialogueElementId === dialogue.id) {
+          const sourceText = element.localSpeechGeneration?.text ?? element.legacyVoice?.sourceText;
+          links.push({ ref: { trackId: audio.id, elementId: element.id }, startTime: element.startTime, hidden: false, textChanged: typeof sourceText === "string" && sourceText !== dialogue.params.content, timingChanged: element.startTime !== dialogue.startTime });
+        }
       }
       setImportedLink({ kind: "dialogue", elementId: dialogue.id, sceneId: dialogue.legacyDialogue.sceneId, characterId: dialogue.legacyDialogue.characterId, sourceText: typeof dialogue.params.content === "string" ? dialogue.params.content : null, startTime: dialogue.startTime, links });
     };
@@ -507,9 +517,11 @@ export function PageVideoEditor() {
           <p>{importedLink.kind === "voice" ? "Imported voice" : "Imported dialogue"}</p>
           <p>Scene: {importedLink.sceneId ?? "unknown"}; character: {importedLink.characterId ?? "unknown"}</p>
           <p className="break-words">{importedLink.sourceText ?? "No source text"}</p>
+          {importedLink.textChanged && <p>Dialogue text differs from this audio's source text.</p>}
+          {importedLink.timingChanged && <p>Dialogue and audio start at different times.</p>}
           {importedLink.kind === "dialogue" && <button type="button" disabled={importing || !importedLink.sourceText?.trim() || importedLink.sourceText.length > 500} onClick={() => { setMockDialogue(importedLink.sourceText!); EditorCore.getInstance().playback.seek({ time: importedLink.startTime }); }}>Use selected dialogue for speech</button>}
           {importedLink.kind === "dialogue" && (importedLink.sourceText?.length ?? 0) > 500 && <p>Dialogue exceeds the 500-character limit.</p>}
-          {importedLink.links.length === 0 ? <p>{importedLink.kind === "voice" ? "Linked dialogue is unavailable." : "No linked audio."}</p> : importedLink.links.map((link, index) => <button key={link.ref.elementId} type="button" className="block underline" onClick={() => { const editor = EditorCore.getInstance(); editor.selection.setSelectedElements({ elements: [link.ref] }); editor.playback.seek({ time: link.startTime }); }}>{importedLink.kind === "voice" ? "Select linked dialogue" : `Select linked audio ${index + 1}`}{link.hidden ? " (hidden track)" : ""}</button>)}
+          {importedLink.links.length === 0 ? <p>{importedLink.kind === "voice" ? "Linked dialogue is unavailable." : "No linked audio."}</p> : importedLink.links.map((link, index) => <button key={link.ref.elementId} type="button" className="block underline" onClick={() => { const editor = EditorCore.getInstance(); editor.selection.setSelectedElements({ elements: [link.ref] }); editor.playback.seek({ time: link.startTime }); }}>{importedLink.kind === "voice" ? "Select linked dialogue" : `Select linked audio ${index + 1}`}{link.hidden ? " (hidden track)" : ""}{link.textChanged ? " (text changed)" : ""}{link.timingChanged ? " (timing changed)" : ""}</button>)}
         </section>}
         </div>
       </details>
