@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AnimationClip, AnimationMixer, Bone, BoxGeometry, Float32BufferAttribute, Group, MeshBasicMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Skeleton, SkinnedMesh, Uint16BufferAttribute } from "three";
+import { AnimationClip, AnimationMixer, Bone, BoxGeometry, Float32BufferAttribute, Group, MeshBasicMaterial, Quaternion, QuaternionKeyframeTrack, Scene, Skeleton, SkinnedMesh, Uint16BufferAttribute, Vector3 } from "three";
 import { GLTFLoader } from "three/addons/loaders/GLTFLoader.js";
 import { exportPosedCharacter } from "./exportPosedCharacter";
 import { CharacterAnimationManager } from "../engine/animation/CharacterAnimationManager";
@@ -9,10 +9,33 @@ import { EASING_PRESETS } from "../engine/timeline/types";
 describe("posed GLB export", () => {
   it("rejects an unsupported nested rig without modifying it", async () => {
     const root = new Group(); root.userData.isCharacter = true;
-    const nested = new Group(); const mesh = new SkinnedMesh(new BoxGeometry(), new MeshBasicMaterial());
+    const nested = new Group(); nested.position.x = 1; const mesh = new SkinnedMesh(new BoxGeometry(), new MeshBasicMaterial());
     nested.add(mesh); root.add(nested);
     await expect(exportPosedCharacter(root)).rejects.toThrow("rig hierarchy");
     expect(mesh.parent).toBe(nested);
+  });
+  it("rejects manually transformed group matrices", async () => {
+    const root = new Group(); root.userData.isCharacter = true;
+    const nested = new Group(); nested.matrixAutoUpdate = false; nested.matrix.makeTranslation(1, 0, 0);
+    const mesh = new SkinnedMesh(new BoxGeometry(), new MeshBasicMaterial()); nested.add(mesh); root.add(nested);
+    await expect(exportPosedCharacter(root)).rejects.toThrow("rig hierarchy");
+  });
+  it("preserves posed vertices when an identity group contains the skin and skeleton", async () => {
+    const root = new Group(); root.name = "character"; root.userData.isCharacter = true;
+    const group = new Group(); group.name = "armature"; const bone = new Bone(); bone.name = "bone";
+    const geometry = new BoxGeometry(), count = geometry.getAttribute("position").count;
+    geometry.setAttribute("skinIndex", new Uint16BufferAttribute(new Uint16Array(count * 4), 4));
+    const weights = new Float32Array(count * 4); for (let i = 0; i < count; i++) weights[i * 4] = 1;
+    geometry.setAttribute("skinWeight", new Float32BufferAttribute(weights, 4));
+    const mesh = new SkinnedMesh(geometry, new MeshBasicMaterial()); mesh.name = "mesh";
+    root.add(group); group.add(bone, mesh); root.updateMatrixWorld(true); mesh.bind(new Skeleton([bone]));
+    root.position.set(2, 1, -3); bone.rotation.z = 0.4; root.updateMatrixWorld(true); mesh.skeleton.update();
+    const original = mesh.applyBoneTransform(0, new Vector3().fromBufferAttribute(geometry.getAttribute("position"), 0)).applyMatrix4(mesh.matrixWorld);
+    const result = await exportPosedCharacter(root); const gltf = await new GLTFLoader().parseAsync(result, "");
+    let exported: SkinnedMesh | undefined; gltf.scene.traverse(object => { if ((object as SkinnedMesh).isSkinnedMesh) exported = object as SkinnedMesh; });
+    expect(exported).toBeDefined(); gltf.scene.updateMatrixWorld(true); exported!.skeleton.update();
+    const actual = exported!.applyBoneTransform(0, new Vector3().fromBufferAttribute(exported!.geometry.getAttribute("position"), 0)).applyMatrix4(exported!.matrixWorld);
+    expect(actual.distanceTo(original)).toBeLessThan(0.0001); expect(mesh.parent).toBe(group);
   });
   it("does not silently omit bone clips or a missing object track", async () => {
     const root = new Group(); root.userData.isCharacter = true;

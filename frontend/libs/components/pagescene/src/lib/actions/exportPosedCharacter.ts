@@ -1,4 +1,4 @@
-import { AnimationClip, Euler, Object3D, Quaternion, QuaternionKeyframeTrack, Scene, SkinnedMesh, VectorKeyframeTrack } from "three";
+import { AnimationClip, Euler, Matrix4, Object3D, Quaternion, QuaternionKeyframeTrack, Scene, SkinnedMesh, VectorKeyframeTrack } from "three";
 import { GLTFExporter } from "three/addons/exporters/GLTFExporter.js";
 import { clone } from "three/addons/utils/SkeletonUtils.js";
 import { sampleTrackAt } from "../engine/timeline/interpolation";
@@ -15,15 +15,17 @@ export async function exportPosedCharacter(character: Object3D, sourceTimeline?:
   character.updateMatrixWorld(true);
   // Do not mutate the editor's live rig. glTF ignores skinned mesh node
   // transforms, so export simple mesh nodes at scene root while the skeleton
-  // keeps the character's placement. Reject unsupported nesting instead of
+  // keeps the character's placement. Identity-only groups can be flattened; reject other nesting instead of
   // silently exporting a differently placed character.
   const sourceMeshes: SkinnedMesh[] = [];
   character.traverse((object) => { if ((object as SkinnedMesh).isSkinnedMesh) sourceMeshes.push(object as SkinnedMesh); });
   if (!sourceMeshes.length) throw new Error("The selected character has no skinned mesh.");
+  const identityMatrix = new Matrix4();
+  const identity = (object: Object3D) => object.matrix.equals(identityMatrix) && object.position.lengthSq() === 0 && object.quaternion.x === 0 && object.quaternion.y === 0 && object.quaternion.z === 0 && object.quaternion.w === 1 && object.scale.x === 1 && object.scale.y === 1 && object.scale.z === 1;
   for (const mesh of sourceMeshes) {
-    if (mesh.parent !== character || mesh.children.length || !mesh.skeleton || mesh.position.lengthSq() !== 0 ||
-      mesh.quaternion.x !== 0 || mesh.quaternion.y !== 0 || mesh.quaternion.z !== 0 || mesh.quaternion.w !== 1 ||
-      mesh.scale.x !== 1 || mesh.scale.y !== 1 || mesh.scale.z !== 1 ||
+    let parent = mesh.parent;
+    while (parent && parent !== character && !(parent as { isBone?: boolean }).isBone && identity(parent)) parent = parent.parent;
+    if (parent !== character || mesh.children.length || !mesh.skeleton || !identity(mesh) ||
       mesh.skeleton.bones.some((bone) => !character.getObjectByProperty("uuid", bone.uuid))) {
       throw new Error("This rig hierarchy is not supported for posed GLB export.");
     }
