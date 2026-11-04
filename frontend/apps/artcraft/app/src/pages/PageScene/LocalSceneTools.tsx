@@ -169,6 +169,23 @@ export function LocalSceneTools() {
     if (!objectId) throw new Error("The model could not be added to the scene.");
     return "Character added. Save the local scene to retain its placement.";
   });
+  const rigLocalModel = (file?: File) => run(async () => {
+    if (!file) return "No file selected.";
+    if (!file.name.toLowerCase().endsWith(".glb") || file.size < 20 || file.size > MAX_BYTES) throw new Error("Select a GLB up to 50 MiB.");
+    const editor = getActiveEditor(), epoch = sceneEpoch.current;
+    if (!editor?.sceneManager) throw new Error("3D stage is not ready.");
+    const content = Array.from(new Uint8Array(await file.arrayBuffer()));
+    const inputId = await invoke<string>("total_recall_asset_put", { content });
+    if (getActiveEditor() !== editor || !editor.isLive || sceneEpoch.current !== epoch) throw new Error("The 3D stage changed before rigging started.");
+    setMessage("Rigging local GLB with SkinTokens…");
+    const result = await invoke<{ assetId: string; provenance: { schemaVersion: number; providerId: string; inputSha256: string; outputSha256: string; numBeams: number } }>("total_recall_rig_generate", { inputId, beams: 1 });
+    const provenance = result.provenance;
+    if (!provenance || provenance.schemaVersion !== 1 || provenance.providerId !== "skintokens" || inputId !== `local-glb:${provenance.inputSha256}` || result.assetId !== `local-glb:${provenance.outputSha256}` || provenance.numBeams !== 1) throw new Error("Invalid rigging result.");
+    if (getActiveEditor() !== editor || !editor.isLive || sceneEpoch.current !== epoch) throw new Error("The 3D stage changed before the rigged model was added.");
+    const objectId = await addCharacter(editor, { media_id: result.assetId, name: `${file.name} (rigged)`, type: AssetType.CHARACTER, version: 2 }, undefined, undefined, provenance);
+    if (!objectId) throw new Error("The rigged model could not be added to the scene.");
+    return "Rigged character added. Save the local scene to retain it.";
+  });
   const addMotion = (file?: File) => run(async () => {
     if (!file) return "No file selected.";
     if (!file.name.toLowerCase().endsWith(".glb") || file.size < 20 || file.size > MAX_BYTES) throw new Error("Select a GLB up to 50 MiB.");
@@ -449,6 +466,7 @@ export function LocalSceneTools() {
         await invoke("total_recall_project_create", { id, document: { ...source, id, name, updatedAt: Date.now(), recoveredFrom: { schemaVersion: 1, projectId: source.id, revision } } });
       }} />
       <label className="cursor-pointer rounded px-2 py-1">Add local GLB<input aria-label="Add local GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void add(event.target.files?.[0]); event.target.value = ""; }} /></label>
+      <label className="cursor-pointer rounded px-2 py-1">Rig local GLB<input aria-label="Rig local GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void rigLocalModel(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label className="cursor-pointer rounded px-2 py-1">Add local motion GLB<input aria-label="Add local motion GLB" type="file" accept=".glb,model/gltf-binary" className="sr-only" disabled={busy} onChange={(event) => { void addMotion(event.target.files?.[0]); event.target.value = ""; }} /></label>
       <label>MHR coefficient <select aria-label="MHR coefficient" className="text-black" value={identityIndex} disabled={busy} onChange={(event) => setIdentityIndex(Number(event.target.value))}>{Array.from({ length: IDENTITY_COUNT }, (_, index) => <option key={index} value={index}>{index + 1}</option>)}</select></label>
       <label>Coefficient value <input aria-label="MHR coefficient value" type="number" min={-3} max={3} step={0.1} className="w-16 text-black" value={identityDraft[identityIndex]} disabled={busy} onChange={(event) => { const value = event.currentTarget.value; setIdentityDraft((previous) => previous.map((item, index) => index === identityIndex ? value : item)); }} /></label>

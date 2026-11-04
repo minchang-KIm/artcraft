@@ -8,9 +8,10 @@ use std::sync::Mutex;
 use tauri::State;
 use tauri_plugin_dialog::DialogExt;
 
-const KEYS: [&str; 12] = [
+const KEYS: [&str; 15] = [
   "TOTAL_RECALL_IMPORT_PYTHON", "TOTAL_RECALL_IMPORT_WORKER",
   "TOTAL_RECALL_RENDER_PYTHON", "TOTAL_RECALL_RENDER_WORKER", "TOTAL_RECALL_RENDER_FFMPEG",
+  "TOTAL_RECALL_RIG_PYTHON", "TOTAL_RECALL_RIG_WORKER", "TOTAL_RECALL_RIG_WORKSPACE",
   "TOTAL_RECALL_VOICE_PYTHON", "TOTAL_RECALL_VOICE_WORKER", "TOTAL_RECALL_VOICE_ESPEAK",
   "TOTAL_RECALL_MHR_PYTHON", "TOTAL_RECALL_MHR_WORKER", "TOTAL_RECALL_MHR_MODEL", "TOTAL_RECALL_MHR_ROOT",
 ];
@@ -44,7 +45,7 @@ fn update(path: &Path, key: &str, value: Option<PathBuf>) -> Result<(), String> 
   let _guard = SETTINGS_LOCK.lock().map_err(|_| "Worker settings unavailable")?;
   let mut settings = read(path)?;
   if let Some(value) = value {
-    let valid = value.is_absolute() && if key == "TOTAL_RECALL_MHR_ROOT" { value.is_dir() } else { value.is_file() };
+    let valid = value.is_absolute() && if (key == "TOTAL_RECALL_MHR_ROOT" || key == "TOTAL_RECALL_RIG_WORKSPACE") { value.is_dir() } else { value.is_file() };
     if !valid { return Err("Choose an existing local file or directory".into()); }
     settings.paths.insert(key.to_owned(), value);
   } else { settings.paths.remove(key); }
@@ -87,7 +88,7 @@ pub async fn total_recall_choose_worker_setting(app: tauri::AppHandle, root: Sta
   let path = settings_path(&root);
   tauri::async_runtime::spawn_blocking(move || {
     let dialog = app.dialog().file().set_title(format!("Choose {key}"));
-    let choice = if key == "TOTAL_RECALL_MHR_ROOT" { dialog.blocking_pick_folder() } else { dialog.blocking_pick_file() };
+    let choice = if (key == "TOTAL_RECALL_MHR_ROOT" || key == "TOTAL_RECALL_RIG_WORKSPACE") { dialog.blocking_pick_folder() } else { dialog.blocking_pick_file() };
     let Some(choice) = choice else { return Ok(false); };
     let value = choice.into_path().map_err(|error| error.to_string())?;
     update(&path, &key, Some(value))?;

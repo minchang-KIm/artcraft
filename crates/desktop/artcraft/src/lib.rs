@@ -1,3 +1,4 @@
+use crate::core::commands::total_recall_project::rig_generate::total_recall_rig_generate;
 use crate::core::commands::total_recall_project::voice_generate::total_recall_voice_generate;
 use crate::core::commands::total_recall_project::scene_sequence::{total_recall_scene_sequence_begin, total_recall_scene_sequence_append, total_recall_scene_sequence_finish, total_recall_scene_sequence_abort};
 use crate::core::commands::total_recall_project::recovery::{total_recall_recovery_projects, total_recall_project_history, total_recall_project_revision};
@@ -267,6 +268,7 @@ pub fn run() {
     total_recall_prepare_webtoon,
     total_recall_export_glb,
     total_recall_mhr_generate,
+    total_recall_rig_generate,
     total_recall_voice_generate,
     total_recall_media_get,
     total_recall_media_put,
