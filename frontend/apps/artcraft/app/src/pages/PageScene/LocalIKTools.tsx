@@ -3,6 +3,8 @@ import { Object3D, Quaternion, Vector3 } from "three";
 import { getActiveEditor, IKTargetHandle, PoseModeChangedEvent, SceneResetEvent, SelectionChangedEvent, TimelineChangedEvent, TimelinePlayheadEvent, solveTwoBoneIK } from "@storyteller/ui-pagescene";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
 import { acquirePosePreview, hasPosePreview } from "./pose-control-lease";
+import { decodeWebcamMappings } from "./webcam-mapping-storage";
+import { WEBCAM_SEGMENTS } from "./webcam-landmarks";
 
 const END_NAMES: Record<string, string[]> = {
   "left-arm": ["l_wrist", "mixamoriglefthand", "mixamorig:lefthand", "mixamorig_lefthand"],
@@ -155,14 +157,35 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
   const suggest = () => {
     const character = selectedCharacter();
     if (!character) { setStatus("Select one character."); return; }
-    const proposal = suggestWebcamMappings(character, scope);
-    if (proposal.mappings.length !== 2) { setStatus("No unambiguous matching chain. Select bones manually."); return; }
-    const middle = character.getObjectByProperty("uuid", proposal.mappings[1].boneId);
-    const ends: Object3D[] = [];
-    middle?.traverse(node => { if (node.type === "Bone" && END_NAMES[scope]?.includes(node.name.toLowerCase())) ends.push(node); });
-    if (ends.length !== 1) { setStatus("Could not identify a unique end bone. Select bones manually."); return; }
-    setUpperId(proposal.mappings[0].boneId); setMiddleId(proposal.mappings[1].boneId); setEndId(ends[0].uuid);
-    const p = ends[0].getWorldPosition(new Vector3()); setTarget([p.x.toFixed(4), p.y.toFixed(4), p.z.toFixed(4)]);
+    setUpperId(""); setMiddleId(""); setEndId("");
+    const segments: Partial<Record<MappingScope, [number, number]>> = { "left-arm": [0, 1], "right-arm": [2, 3], "left-leg": [4, 5], "right-leg": [6, 7] };
+    const pair = segments[scope];
+    if (!pair) { setStatus("Choose a single arm or leg."); return; }
+    let upper: Object3D | undefined, middle: Object3D | undefined;
+    if (character.userData.totalRecallWebcamMappings !== undefined) {
+      try {
+        const saved = decodeWebcamMappings(character, character.userData.totalRecallWebcamMappings, WEBCAM_SEGMENTS.length);
+        upper = character.getObjectByProperty("uuid", saved.find(item => item.segment === pair[0])?.boneId);
+        middle = character.getObjectByProperty("uuid", saved.find(item => item.segment === pair[1])?.boneId);
+      } catch { setStatus("Saved bone mappings do not match this skeleton. Choose bones manually."); return; }
+    } else {
+      const proposal = suggestWebcamMappings(character, scope);
+      upper = character.getObjectByProperty("uuid", proposal.mappings[0]?.boneId);
+      middle = character.getObjectByProperty("uuid", proposal.mappings[1]?.boneId);
+    }
+    let ancestor = middle?.parent;
+    while (ancestor && ancestor !== upper) ancestor = ancestor.parent;
+    if (!upper || !middle || ancestor !== upper) { setStatus("No unambiguous matching chain. Select bones manually."); return; }
+    const namedEnds: Object3D[] = [];
+    middle.traverse(node => { if (node !== middle && node.type === "Bone" && END_NAMES[scope]?.includes(node.name.toLowerCase())) namedEnds.push(node); });
+    // For generic rigs, consider only the first bone on each descendant branch.
+    const nearest: Object3D[] = [];
+    const walk = (node: Object3D) => { for (const child of node.children) { if (child.type === "Bone") nearest.push(child); else walk(child); } };
+    walk(middle);
+    const end = namedEnds.length === 1 ? namedEnds[0] : namedEnds.length === 0 && nearest.length === 1 ? nearest[0] : undefined;
+    setUpperId(upper.uuid); setMiddleId(middle.uuid); setEndId(end?.uuid ?? "");
+    if (!end) { setStatus("Upper and middle bones selected. Select the end bone manually."); return; }
+    const p = end.getWorldPosition(new Vector3()); setTarget([p.x.toFixed(4), p.y.toFixed(4), p.z.toFixed(4)]);
     setStatus("Chain suggested. Review the bones and choose a target.");
   };
 
