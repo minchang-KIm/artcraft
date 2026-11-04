@@ -178,13 +178,13 @@ export function LocalSceneTools() {
     const inputId = await invoke<string>("total_recall_asset_put", { content });
     if (getActiveEditor() !== editor || !editor.isLive || sceneEpoch.current !== epoch) throw new Error("The 3D stage changed before rigging started.");
     setMessage("Rigging local GLB with SkinTokens…");
-    const result = await invoke<{ assetId: string; provenance: { schemaVersion: number; providerId: string; inputSha256: string; outputSha256: string; numBeams: number } }>("total_recall_rig_generate", { inputId, beams: 1 });
+    const result = await invoke<{ assetId: string; provenance: { schemaVersion: number; providerId: string; inputSha256: string; outputSha256: string; numBeams: number; rigValidation: { schemaVersion: number; checkedVertices: number; maxWeightSumError: number; maxInfluences: number } } }>("total_recall_rig_generate", { inputId, beams: 1 });
     const provenance = result.provenance;
-    if (!provenance || provenance.schemaVersion !== 1 || provenance.providerId !== "skintokens" || inputId !== `local-glb:${provenance.inputSha256}` || result.assetId !== `local-glb:${provenance.outputSha256}` || provenance.numBeams !== 1) throw new Error("Invalid rigging result.");
+    if (!provenance || provenance.schemaVersion !== 1 || provenance.providerId !== "skintokens" || inputId !== `local-glb:${provenance.inputSha256}` || result.assetId !== `local-glb:${provenance.outputSha256}` || provenance.numBeams !== 1 || provenance.rigValidation?.schemaVersion !== 1 || !Number.isSafeInteger(provenance.rigValidation.checkedVertices) || provenance.rigValidation.checkedVertices <= 0 || provenance.rigValidation.maxInfluences !== 4 || !Number.isFinite(provenance.rigValidation.maxWeightSumError) || provenance.rigValidation.maxWeightSumError < 0 || provenance.rigValidation.maxWeightSumError > 0.005) throw new Error("Invalid rigging result.");
     if (getActiveEditor() !== editor || !editor.isLive || sceneEpoch.current !== epoch) throw new Error("The 3D stage changed before the rigged model was added.");
     const objectId = await addCharacter(editor, { media_id: result.assetId, name: `${file.name} (rigged)`, type: AssetType.CHARACTER, version: 2 }, undefined, undefined, provenance);
     if (!objectId) throw new Error("The rigged model could not be added to the scene.");
-    return "Rigged character added. Save the local scene to retain it.";
+    return `Rigged character added. Checked ${provenance.rigValidation.checkedVertices} skin vertices. Save the local scene to retain it.`;
   });
   const addMotion = (file?: File) => run(async () => {
     if (!file) return "No file selected.";
