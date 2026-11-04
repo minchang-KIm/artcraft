@@ -63,6 +63,38 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
   const [restoring, setRestoring] = useState(false);
   const [keys, setKeys] = useState<Array<{ id: string; time: number; bone: string }>>([]);
   const handleSession = useRef<HandleSession | null>(null);
+  const probeSession = useRef<{ bone: Object3D; before: Quaternion; release: () => void } | null>(null);
+  const [probing, setProbing] = useState(false);
+  const [probeAxis, setProbeAxis] = useState("X");
+  const [probeAngle, setProbeAngle] = useState("45");
+
+  const stopProbe = (updateUi = true) => {
+    const current = probeSession.current;
+    if (!current) return;
+    probeSession.current = null;
+    try { current.bone.quaternion.copy(current.before); current.bone.updateWorldMatrix(true, true); }
+    finally { current.release(); }
+    if (updateUi) { setProbing(false); setStatus("Joint preview cancelled; the original pose was restored."); }
+  };
+
+  const startProbe = () => {
+    const editor = getActiveEditor(), character = selectedCharacter();
+    let release: (() => void) | undefined;
+    try {
+      if (!editor || !character || !editor.isLive || editor.timelineController.getIsPlaying() || hasPosePreview(editor)) throw new Error("Select one character, pause playback, and finish the active pose preview first.");
+      editor.characterAnimationManager.assertReadyForCapture(editor.timelineController.getTimeline()?.clipLanes.filter(lane => lane.objectUuid === character.uuid) ?? []);
+      const bone = character.getObjectByProperty("uuid", middleId);
+      const angle = probeAngle.trim() ? Number(probeAngle) : NaN;
+      if (!bone || bone.type !== "Bone" || !Number.isFinite(angle) || Math.abs(angle) > 180) throw new Error("Select a middle bone and enter an angle from -180 to 180 degrees.");
+      const axis = probeAxis === "X" ? new Vector3(1, 0, 0) : probeAxis === "Y" ? new Vector3(0, 1, 0) : new Vector3(0, 0, 1);
+      const before = bone.quaternion.clone();
+      release = acquirePosePreview(editor);
+      probeSession.current = { bone, before, release };
+      bone.quaternion.multiply(new Quaternion().setFromAxisAngle(axis, angle * Math.PI / 180));
+      bone.updateWorldMatrix(true, true);
+      setProbing(true); setStatus("Inspect the joint deformation, then close the preview to restore the pose.");
+    } catch (error) { if (probeSession.current) stopProbe(false); else release?.(); setStatus(error instanceof Error ? error.message : String(error)); }
+  };
 
   const stopHandle = (commit: boolean, updateUi = true) => {
     const current = handleSession.current;
@@ -100,7 +132,7 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
       setKeys(tracks.filter(track => track.objectUuid === character?.uuid).flatMap(track => track.keyframes.map(key => ({ id: key.id, time: key.time, bone: track.path.at(-1)?.name || "Unnamed bone" }))).sort((a, b) => a.time - b.time || a.bone.localeCompare(b.bone)));
     };
     const refresh = () => {
-      stopHandle(false);
+      stopHandle(false); stopProbe();
       const list: Array<{ id: string; name: string }> = [];
       selectedCharacter()?.traverse((bone: Object3D) => { if (bone.type === "Bone") list.push({ id: bone.uuid, name: bone.name || "Unnamed bone" }); });
       setBones(list); setUpperId(""); setMiddleId(""); setEndId(""); setStatus("");
@@ -110,14 +142,14 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     const selection = editor.bus.subscribe(SelectionChangedEvent, refresh);
     const reset = editor.bus.subscribe(SceneResetEvent, refresh);
     const timeline = editor.bus.subscribe(TimelinePlayheadEvent, () => {
-      if (handleSession.current) { stopHandle(false); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
+      if (handleSession.current || probeSession.current) { stopHandle(false); stopProbe(); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
     });
-    const poseMode = editor.bus.subscribe(PoseModeChangedEvent, () => stopHandle(false));
+    const poseMode = editor.bus.subscribe(PoseModeChangedEvent, () => { stopHandle(false); stopProbe(); });
     const changed = editor.bus.subscribe(TimelineChangedEvent, () => {
-      if (handleSession.current) { stopHandle(false); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
+      if (handleSession.current || probeSession.current) { stopHandle(false); stopProbe(); editor.characterAnimationManager.evaluateAt(editor.timelineController.getPlayhead()); }
       refreshKeys();
     });
-    return () => { selection(); reset(); timeline(); poseMode(); changed(); stopHandle(false, false); };
+    return () => { selection(); reset(); timeline(); poseMode(); changed(); stopHandle(false, false); stopProbe(false); };
   }, [editorInitialized]);
 
   const suggest = () => {
@@ -282,13 +314,16 @@ export function LocalIKTools({ editorInitialized }: { editorInitialized: boolean
     <label>Chain <select aria-label="IK chain" className="text-black" value={scope} disabled={handling} onChange={event => setScope(event.target.value as MappingScope)}><option value="left-arm">Left arm</option><option value="right-arm">Right arm</option><option value="left-leg">Left leg</option><option value="right-leg">Right leg</option></select></label>
     <button type="button" disabled={!bones.length || handling} onClick={suggest}>Suggest IK chain</button>
     <label>Upper <select aria-label="IK upper bone" className="max-w-48 text-black" value={upperId} disabled={handling} onChange={event => setUpperId(event.target.value)}>{options}</select></label>
-    <label>Middle <select aria-label="IK middle bone" className="max-w-48 text-black" value={middleId} disabled={handling} onChange={event => setMiddleId(event.target.value)}>{options}</select></label>
+    <label>Middle <select aria-label="IK middle bone" className="max-w-48 text-black" value={middleId} disabled={handling || probing} onChange={event => setMiddleId(event.target.value)}>{options}</select></label>
     <label>End <select aria-label="IK end bone" className="max-w-48 text-black" value={endId} disabled={handling} onChange={event => setEndId(event.target.value)}>{options}</select></label>
     <button type="button" disabled={!endId || handling} onClick={readEndPosition}>Use current end position</button>
     {(["X", "Y", "Z"] as const).map((axis, index) => <label key={axis}>Target {axis} <input aria-label={`IK target ${axis}`} type="number" step="0.01" className="w-20 text-black" value={target[index]} disabled={handling} onChange={event => { const value = event.currentTarget.value; setTarget(previous => previous.map((item, i) => i === index ? value : item) as [string, string, string]); }} /></label>)}
     <label>Joint limit (degrees) <input aria-label="IK joint limit" type="number" min="0" max="180" step="1" className="w-16 text-black" value={limit} disabled={handling} onChange={event => setLimit(event.currentTarget.value)} /></label>
     <button type="button" disabled={!upperId || !middleId || !endId || handling} onClick={apply}>Apply IK target</button>
     {!handling ? <button type="button" disabled={!upperId || !middleId || !endId} onClick={startHandle}>Start IK handle</button> : <><button type="button" onClick={() => stopHandle(true)}>Apply IK handle</button><button type="button" onClick={() => stopHandle(false)}>Cancel IK handle</button></>}
+    <label>Joint preview axis <select aria-label="Joint preview axis" className="text-black" value={probeAxis} disabled={probing} onChange={event => setProbeAxis(event.target.value)}><option>X</option><option>Y</option><option>Z</option></select></label>
+    <label>Joint preview angle <input aria-label="Joint preview angle" className="w-16 text-black" type="number" min="-180" max="180" value={probeAngle} disabled={probing} onChange={event => setProbeAngle(event.currentTarget.value)} /></label>
+    {!probing ? <button type="button" disabled={!middleId || handling || restoring} onClick={startProbe}>Preview middle joint</button> : <button type="button" onClick={() => stopProbe()}>Close joint preview</button>}
     <button type="button" disabled={!upperId || !middleId || handling} onClick={keyPose}>Key IK pose at playhead</button>
     <button type="button" disabled={!bones.length || handling || restoring} onClick={keyFullPose}>Key full pose at playhead</button>
     <button type="button" disabled={!bones.length || handling || restoring} onClick={() => void restoreRestPose()}>Restore local rest pose</button>
