@@ -282,6 +282,7 @@ export class SceneManager implements SceneManagerAPI {
         obj.userData.isCharacter = true;
         if (userdata.totalRecallMhr !== undefined) obj.userData.totalRecallMhr = JSON.parse(JSON.stringify(userdata.totalRecallMhr));
         if (userdata.totalRecallRig !== undefined) obj.userData.totalRecallRig = JSON.parse(JSON.stringify(userdata.totalRecallRig));
+        if (userdata.totalRecallWebcamMappings !== undefined) obj.userData.totalRecallWebcamMappings = JSON.parse(JSON.stringify(userdata.totalRecallWebcamMappings));
       }
 
       this.mouse_controls.selectObject(obj);

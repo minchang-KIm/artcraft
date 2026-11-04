@@ -6,7 +6,8 @@ import { getActiveEditor, LandmarkBoneRetarget, SceneResetEvent, SelectionChange
 import { encodeWebcamMotion, WebcamMotionRecorder } from "./webcam-motion";
 import { suggestWebcamMappings, type MappingScope } from "./webcam-rig-mapping";
 import { WEBCAM_SEGMENTS as SEGMENTS, webcamSecondaryAxis, webcamSegmentPoints } from "./webcam-landmarks";
-import { acquirePosePreview } from "./pose-control-lease";
+import { acquirePosePreview, hasPosePreview } from "./pose-control-lease";
+import { encodeWebcamMappings, decodeWebcamMappings } from "./webcam-mapping-storage";
 import workerUrl from "../../../../../../../../../workers/pose/landmarker-worker.mjs?url";
 import visionUrl from "@mediapipe/tasks-vision?url";
 import wasmLoaderUrl from "@mediapipe/tasks-vision/vision_wasm_internal.js?url";
@@ -104,7 +105,15 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       character?.traverse((item: Object3D) => { if (item.type === "Bone") next.push({ id: item.uuid, name: item.name || "Unnamed bone" }); });
       setBones(next);
       setBoneId(next[0]?.id ?? "");
+      setSegment(0);
       setMappings([]);
+      if (character?.userData.totalRecallWebcamMappings !== undefined) {
+        try {
+          const [first, ...rest] = decodeWebcamMappings(character, character.userData.totalRecallWebcamMappings, SEGMENTS.length);
+          setBoneId(first.boneId); setSegment(first.segment); setMappings(rest);
+          setStatus("Saved bone mappings restored. Review them before calibration.");
+        } catch { setStatus("Saved bone mappings do not match this skeleton. Choose mappings again."); }
+      } else setStatus("");
     };
     refresh();
     const unselect = editor.bus.subscribe(SelectionChangedEvent, refresh);
@@ -269,6 +278,23 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
     } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
   };
 
+  const saveMappings = () => {
+    const editor = getActiveEditor(), selected = editor?.sceneManager?.selected_objects;
+    try {
+      if (!editor || !editor.isLive || selected?.length !== 1 || !selected[0].userData.isCharacter || hasPosePreview(editor)) throw new Error("Select a character and finish the active pose preview first.");
+      const character = selected[0], next = encodeWebcamMappings(character, [{ boneId, segment }, ...mappings], SEGMENTS.length);
+      const previous = character.userData.totalRecallWebcamMappings;
+      const write = (value: unknown) => {
+        if (editor.activeScene.scene.getObjectByProperty("uuid", character.uuid) !== character) throw new Error("The character is no longer available.");
+        if (value === undefined) delete character.userData.totalRecallWebcamMappings;
+        else character.userData.totalRecallWebcamMappings = value;
+      };
+      write(next);
+      editor.history.record({ label: "Save webcam mappings", apply: () => write(next), revert: () => write(previous) });
+      setStatus("Bone mappings saved on the character. Save the local scene to retain them.");
+    } catch (error) { setStatus(error instanceof Error ? error.message : String(error)); }
+  };
+
   const suggestMappings = () => {
     const selected = getActiveEditor()?.sceneManager?.selected_objects;
     if (selected?.length !== 1 || !selected[0].userData.isCharacter) { setStatus("Select one character in the scene."); return; }
@@ -375,6 +401,7 @@ export function LocalWebcamPose({ editorInitialized }: { editorInitialized: bool
       const nextSegment = SEGMENTS.findIndex((_, index) => !usedSegments.has(index));
       if (nextBone && nextSegment >= 0) setMappings(previous => [...previous, { boneId: nextBone.id, segment: nextSegment }]);
     }}>Add bone mapping</button>
+    <button type="button" disabled={calibrated || saving || !boneId} onClick={saveMappings}>Save bone mappings</button>
     <label><input type="checkbox" checked={mirror} disabled={calibrated} onChange={event => setMirror(event.target.checked)} /> Mirror motion</label>
     <label>When tracking is lost <select aria-label="When tracking is lost" className="text-black" value={lossMode} disabled={calibrated} onChange={event => setLossMode(event.target.value as "hold" | "fade")}><option value="hold">Hold last pose</option><option value="fade">Return to calibrated pose</option></select></label>
     <video ref={video} muted playsInline aria-label="Local camera preview" className="max-w-48" />
